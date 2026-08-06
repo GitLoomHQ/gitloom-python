@@ -82,4 +82,4 @@ returns.
 
 ## Docs
 
-https://gitloom.cloud/docs/sdk-python.html
+https://docs.gitloom.cloud/documentation/python

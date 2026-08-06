@@ -15,7 +15,7 @@ keywords = ["llm", "memory", "conversations", "context", "openai", "anthropic"]
 
 [project.urls]
 Homepage = "https://gitloom.cloud"
-Documentation = "https://gitloom.cloud/docs/sdk-python.html"
+Documentation = "https://docs.gitloom.cloud/documentation/python"
 Repository = "https://github.com/GitLoomHQ/gitloom-python"
 
 [tool.hatch.build.targets.wheel]
