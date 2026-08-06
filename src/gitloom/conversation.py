@@ -145,11 +145,13 @@ class Conversation:
         ``summarize`` function; GitLoom never sees the conversation to compact
         it — it receives the evicted turns for ingestion, so the flattened
         detail stays recallable."""
-        summarize: Optional[Summarizer] = self._opts.get("summarize")
+        summarize = self._opts.get("summarize")
         if summarize is None:
             raise GitloomUsageError(
                 "compaction needs a summarize= option; without one the evicted turns would be dropped"
             )
+        if summarize == "server":
+            return self._compact_on_server()
         evicted = self._evictable()
         if not evicted:
             # The estimator sees room, but the trigger knew better — the
@@ -168,6 +170,31 @@ class Conversation:
             f"/v1/conversations/{self.id}/compact",
             json={"branch": self.branch, "summary": summary, "from_seq": start, "to_seq": end},
         )
+        self._summary = f"{self._summary}\n\nThen: {summary}" if self._summary else summary
+        self._history = self._history[len(evicted):]
+        self._first_live_seq = end + 1
+        self._exchanges = 0
+        self._reported_tokens = 0
+        return {"summary": summary, "from": start, "to": end}
+
+    def _compact_on_server(self) -> Optional[dict[str, Any]]:
+        """GitLoom's own model writes the summary from the stored turns —
+        the developer's choice against local summarization. Costs one chat
+        from the account's meter."""
+        evicted = self._evictable()
+        if not evicted:
+            if len(self._history) < 2:
+                return None
+            keep = min(2, len(self._history) - 1)
+            evicted = self._history[: len(self._history) - keep]
+        start = self._first_live_seq
+        end = start + len(evicted) - 1
+        res = self._client._request(
+            "POST",
+            f"/v1/conversations/{self.id}/compact",
+            json={"branch": self.branch, "auto": True, "from_seq": start, "to_seq": end},
+        )
+        summary = (res or {}).get("summary", "")
         self._summary = f"{self._summary}\n\nThen: {summary}" if self._summary else summary
         self._history = self._history[len(evicted):]
         self._first_live_seq = end + 1

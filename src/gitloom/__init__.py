@@ -7,6 +7,7 @@ memory ingestion.
 """
 
 from .client import Gitloom, GitloomError
+from .wrap import wrap
 from .conversation import Conversation
 from .media import image_data, image_part, text_part
 from .tokens import context_limit, estimate_tokens, message_tokens, text_of, total_tokens
@@ -14,6 +15,7 @@ from .tokens import context_limit, estimate_tokens, message_tokens, text_of, tot
 __all__ = [
     "Gitloom",
     "GitloomError",
+    "wrap",
     "Conversation",
     "context_limit",
     "estimate_tokens",
@@ -25,4 +27,4 @@ __all__ = [
     "image_data",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

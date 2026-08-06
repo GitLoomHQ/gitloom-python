@@ -41,7 +41,7 @@ class FakeAPI:
             return ok({"next_seq": self.next_seq, "written": len(body["messages"])})
         if p.endswith("/compact"):
             self.compactions.append(body)
-            return ok({"compacted": True})
+            return ok({"compacted": True, "summary": "server summary" if body.get("auto") else body.get("summary")})
         if p.endswith("/edit"):
             seq = body["seq"]
             name = f"main-{seq}"
@@ -175,3 +175,70 @@ def test_titles_round_trip(api, client):
     assert api.title == "Camera shopping"
     again = client.load_conversation("c1")
     assert again.title == "Camera shopping"
+
+
+class _Obj:
+    def __init__(self, **kw):
+        self.__dict__.update(kw)
+
+
+def _fake_openai(seen):
+    def create(**kwargs):
+        seen.append(kwargs)
+        return _Obj(
+            choices=[_Obj(message=_Obj(content=f"reply {len(seen)}"))],
+            usage=_Obj(prompt_tokens=10, completion_tokens=5),
+        )
+    return _Obj(chat=_Obj(completions=_Obj(create=create)))
+
+
+def test_wrap_is_a_drop_in(api, client):
+    import gitloom as gl
+
+    seen = []
+    openai = gl.wrap(_fake_openai(seen), client)
+
+    # First call: only the new message, plus the one extra field.
+    openai.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "I like Go"}],
+        conversation="conv-1",
+    )
+    assert [m["role"] for m in api.messages] == ["user", "assistant"]
+
+    # Second call: the wrapper supplies the earlier turns itself.
+    openai.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "what do I like?"}],
+        conversation="conv-1",
+    )
+    sent = seen[1]["messages"]
+    texts = [f"{m['role']}:{m['content']}" for m in sent]
+    assert "user:I like Go" in texts
+    assert "assistant:reply 1" in texts
+    assert texts[-1] == "user:what do I like?"
+    assert "conversation" not in seen[1]
+    # Memory context injected as background.
+    assert any("prefers Python" in t for t in texts)
+
+
+def test_wrap_passes_plain_calls_through(api, client):
+    import gitloom as gl
+
+    seen = []
+    openai = gl.wrap(_fake_openai(seen), client)
+    openai.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": "x"}])
+    assert len(seen) == 1 and "conversation" not in seen[0]
+    assert api.messages == []  # nothing stored without a conversation id
+
+
+def test_server_side_compaction(api, client):
+    conv = client.conversation(
+        "c1", model="claude-sonnet-5", compact_every=1, summarize="server",
+    )
+    conv.append([{"role": "user", "content": "q1"}, {"role": "assistant", "content": "a1"}])
+    conv.append([{"role": "user", "content": "q2"}, {"role": "assistant", "content": "a2"}])
+    autos = [c for c in api.compactions if c.get("auto")]
+    assert autos, "server compaction never asked the server"
+    assert "summary" not in autos[0]
+    assert "server summary" in conv.messages()[0]["content"]
