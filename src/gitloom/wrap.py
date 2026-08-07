@@ -35,6 +35,13 @@ class _Wrapped:
         self._defaults = defaults
         self._conversations: dict[str, Conversation] = {}
 
+    @property
+    def gitloom(self) -> "GitloomFeatures":
+        """GitLoom's added features, on the wrapped client itself: branching,
+        edits, titles, media, direct memory — everything the provider SDK does
+        not have. The provider's own surface stays untouched beside it."""
+        return GitloomFeatures(self)
+
     def __getattr__(self, name: str) -> Any:
         value = getattr(self._client, name)
         if name == "chat":
@@ -126,6 +133,36 @@ class _CreateProxy:
         if name == "create":
             return lambda **kwargs: self._wrapped._call(value, self._flavor, kwargs)
         return value
+
+
+class GitloomFeatures:
+    """The added surface on a wrapped client.
+
+    ``openai.gitloom.conversation("chat-42")`` returns the same managed
+    conversation the completions are flowing through, with everything the
+    provider SDK lacks: ``rewind``, ``edit``, ``edit_in_place``, ``set_title``,
+    ``branches``, ``compact``, ``ingest``. ``memory`` is the underlying client
+    for direct ``recall``/``remember``/media.
+    """
+
+    def __init__(self, wrapped: _Wrapped):
+        self._wrapped = wrapped
+
+    @property
+    def memory(self) -> Any:
+        return self._wrapped._memory
+
+    def conversation(self, conversation_id: str, model: str = "") -> Conversation:
+        """The managed conversation behind a ``conversation=`` id. The same
+        object the wrapper appends through, so a rewind here is what the next
+        completion continues from."""
+        return self._wrapped._conversation(conversation_id, model)
+
+    def recall(self, query: str, **kw: Any) -> Any:
+        return self._wrapped._memory.recall(query, **kw)
+
+    def remember(self, messages: Any, **kw: Any) -> Any:
+        return self._wrapped._memory.remember(messages, **kw)
 
 
 def _assistant_text(response: Any) -> Optional[str]:

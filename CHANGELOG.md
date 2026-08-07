@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0 — 2026-08-08
+
+- **Added features on the wrapped client.** `openai.gitloom.conversation(id)`
+  exposes rewind/edit/redaction/titles/branches on the same managed
+  conversation the completions flow through; `openai.gitloom.recall/remember`
+  for direct memory. The provider surface stays untouched beside it.
+- Documentation leads with the drop-in only; the manual append loop is gone.
+
+
 ## 0.2.0 — 2026-08-08
 
 - **Drop-in mode.** `gitloom.wrap(OpenAI(), memory)` — call sites stay the

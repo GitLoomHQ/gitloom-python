@@ -1,84 +1,95 @@
 # gitloom-sdk
 
-Python SDK for [GitLoom](https://gitloom.cloud) — conversations that cannot
-outgrow their context window, backed by a memory the model can consult.
-
-Sits **beside** the OpenAI and Anthropic SDKs, not in place of them: messages
-go in and come out in the provider's own shape, and their responses' `usage`
-objects time compaction.
+Python SDK for [GitLoom](https://gitloom.cloud) — a **drop-in beside the OpenAI
+and Anthropic SDKs**. Wrap the client you already use; your call sites stay
+exactly as they are, one field richer, and the conversation manages itself:
+rolling context window, memory retrieval, storage, compaction, titles.
 
 ```bash
 pip install gitloom-sdk
 ```
 
+## Drop-in
+
 ```python
 import gitloom
-memory = gitloom.Gitloom()   # reads GITLOOM_API_KEY
-```
-
-## The loop
-
-```python
 from openai import OpenAI
 
-openai = OpenAI()
-conv = memory.conversation("chat-42", model="gpt-4o", namespace=user_id,
-                           summarize=my_summarizer)
+memory = gitloom.Gitloom()                 # reads GITLOOM_API_KEY
+openai = gitloom.wrap(OpenAI(), memory)    # ← the only setup
 
-def say(text: str) -> str:
-    user = {"role": "user", "content": text}
-    context = conv.with_context(text)                       # memory, retrieved
-    messages = ([context] if context else []) + conv.for_model() + [user]
-    res = openai.chat.completions.create(model="gpt-4o", messages=messages)
-    reply = res.choices[0].message
-    conv.append([user, {"role": "assistant", "content": reply.content}],
-                usage=res.usage)                            # real token counts
-    return reply.content
+res = openai.chat.completions.create(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "What camera do I own?"}],
+    conversation="chat-42",                # ← the only change per call
+)
+print(res.choices[0].message.content)
 ```
 
-Anthropic works identically — `usage=res.usage` accepts either SDK's object
-(`prompt/completion` or `input/output` spelling) or a plain dict.
+That's the whole loop. Behind that one call:
 
-- The window never overflows: `for_model()` is always inside the model's
-  budget, oldest turns evicted first.
-- Compaction runs on a cadence (default every 5 exchanges) or when the window
-  fills, summarized **locally** by your `summarize` function — GitLoom never
-  sees the conversation to compact it. Each compaction hands the evicted turns
-  to memory ingestion, so the flattened detail stays recallable.
-- Conversations with no title get one automatically at ingestion.
+- the stored conversation supplies the earlier turns — you pass **only the new
+  message**, never append anything;
+- memory is retrieved for the user's message and injected as background;
+- both turns are stored with the response's **real token usage**;
+- compaction runs on cadence (default every 5 exchanges) or window pressure,
+  and every compaction feeds the summarized turns to memory ingestion;
+- untitled conversations get a title automatically at ingestion.
+
+Anthropic clients (`client.messages.create`) wrap identically — system content
+moves to the `system` parameter, usage's `input/output` spelling is understood.
+Calls without `conversation=` pass through completely untouched.
+
+Configure the conversations the wrapper opens:
+
+```python
+openai = gitloom.wrap(OpenAI(), memory,
+                      summarize="server",       # GitLoom's model compacts…
+                      # summarize=my_function,  # …or yours, locally
+                      compact_every=5,
+                      namespace=user_id)
+```
+
+## Added features, on the same client
+
+Everything the provider SDK doesn't have lives under `.gitloom`:
+
+```python
+conv = openai.gitloom.conversation("chat-42")
+
+conv.rewind(6)                                                # fork after seq 6
+conv.edit(4, {"role": "user", "content": "ask differently"})  # fork at same seq
+conv.edit_in_place(4, "[redacted]")                           # destroy the original (PII)
+conv.set_title("Camera shopping")
+conv.branches()
+```
+
+These act on the **same managed conversation** the completions flow through —
+a rewind here is what the next `create(..., conversation="chat-42")` continues
+from.
+
+Direct memory, when you want it:
+
+```python
+openai.gitloom.remember([{"role": "user", "content": "I moved to Pune."}])
+res = openai.gitloom.recall("where do I live?")
+# every hit: scores.arms, provenance (git history + diff), relations with snippets
+```
 
 ## Multimodal
 
 ```python
 from gitloom import image_data, text_part
 
-conv.append({"role": "user", "content": [
-    text_part("what's in this photo?"),
-    image_data(b64, "image/png"),      # uploaded transparently; stored by reference
-]})
+openai.chat.completions.create(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": [
+        text_part("what's in this photo?"),
+        image_data(b64, "image/png"),   # uploaded transparently; stored by reference
+    ]}],
+    conversation="chat-42",
+)
 ```
-
-## Branching, edits, rewind
-
-```python
-conv.rewind(6)                          # fork after seq 6, switch to it
-conv.edit(4, {"role": "user", "content": "ask differently"})   # fork at same seq
-conv.edit_in_place(4, "[redacted]")     # destroy the original, for PII
-conv.set_title("Camera shopping")
-```
-
-## Memory, directly
-
-```python
-memory.remember([{"role": "user", "content": "I moved to Pune."}])
-res = memory.recall("where do I live?")
-for hit in res["hits"]:
-    print(hit["snippet"], hit["scores"]["arms"], hit["provenance"]["when"])
-```
-
-Every hit carries its evidence — per-arm scores, git history with the last
-diff, labelled relation snippets — the same shape every GitLoom surface
-returns.
 
 ## Docs
 

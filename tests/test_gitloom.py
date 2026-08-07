@@ -242,3 +242,32 @@ def test_server_side_compaction(api, client):
     assert autos, "server compaction never asked the server"
     assert "summary" not in autos[0]
     assert "server summary" in conv.messages()[0]["content"]
+
+
+def test_added_features_live_on_the_wrapped_client(api, client):
+    import gitloom as gl
+
+    seen = []
+    openai = gl.wrap(_fake_openai(seen), client)
+    openai.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "original"}],
+        conversation="conv-1",
+    )
+    # Branch/edit/title on the SAME managed conversation the wrapper uses.
+    conv = openai.gitloom.conversation("conv-1")
+    conv.edit(0, {"role": "user", "content": "edited"})
+    assert conv.branch != "main"
+    conv.set_title("My chat")
+    assert api.title == "My chat"
+
+    # The next completion continues from the edited branch: the wrapper and
+    # the features facade share state.
+    openai.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "continue"}],
+        conversation="conv-1",
+    )
+    texts = [f"{m['role']}:{m['content']}" for m in seen[-1]["messages"]]
+    assert "user:edited" in texts
+    assert not any(t == "user:original" for t in texts)
