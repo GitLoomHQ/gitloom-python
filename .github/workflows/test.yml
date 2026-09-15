@@ -1,12 +1,40 @@
 name: Tests
+
 on:
-  push: { branches: [main] }
+  push:
+    branches: [main]
   pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor declared in pyproject and the current release. A syntax or
+        # typing feature that slipped past the floor fails on 3.9, not on a
+        # user's machine.
+        python: ['3.9', '3.13']
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-      - run: uv venv && uv pip install -e . pytest httpx
+      - run: uv venv --python ${{ matrix.python }}
+      - run: uv pip install -e . pytest httpx
       - run: .venv/bin/python -m pytest tests/ -q
+
+      # The wheel is what users install; a packaging mistake is invisible to a
+      # suite that imports from the source tree.
+      - name: Build and import the wheel
+        run: |
+          uv build
+          uv venv --python ${{ matrix.python }} /tmp/wheeltest
+          /tmp/wheeltest/bin/python -m pip install -q dist/*.whl
+          /tmp/wheeltest/bin/python -c "import gitloom; print('import ok:', gitloom.__name__)"
