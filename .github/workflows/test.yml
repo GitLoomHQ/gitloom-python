@@ -36,5 +36,7 @@ jobs:
         run: |
           uv build
           uv venv --python ${{ matrix.python }} /tmp/wheeltest
-          /tmp/wheeltest/bin/python -m pip install -q dist/*.whl
+          # `uv venv` creates an environment with no pip in it, so install
+          # into it with uv rather than through the interpreter.
+          uv pip install --python /tmp/wheeltest/bin/python dist/*.whl
           /tmp/wheeltest/bin/python -c "import gitloom; print('import ok:', gitloom.__name__)"
