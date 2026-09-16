@@ -40,3 +40,11 @@ jobs:
           # into it with uv rather than through the interpreter.
           uv pip install --python /tmp/wheeltest/bin/python dist/*.whl
           /tmp/wheeltest/bin/python -c "import gitloom; print('import ok:', gitloom.__name__)"
+
+      # docs/README.md is what GitBook Git-syncs into this SDK's documentation
+      # space. It is a copy, so a README change that skips it silently leaves
+      # the published docs describing an older API.
+      - name: GitBook copy matches the README
+        run: |
+          diff -u README.md docs/README.md \
+            || { echo "::error::run 'cp README.md docs/README.md' and commit it"; exit 1; }
