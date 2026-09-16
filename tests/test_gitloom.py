@@ -409,3 +409,18 @@ def test_skills_store_and_find():
 
     gl.skills.list()
     assert "q" not in api.skill_params[1]
+
+
+def test_memory_surface_is_reachable_from_the_wrapper(api, client):
+    # The docs tell users to reach memory through the wrapped client. Every
+    # call there has to exist, or the page is wrong.
+    import gitloom as gl
+
+    openai = gl.wrap(_fake_openai([]), client)
+    mem = openai.gitloom
+
+    assert mem.recall("q")["memories"] == client.recall("q")["memories"]
+    assert mem.vocab is client.vocab
+    assert mem.skills is client.skills
+    assert mem.memory is client
+    assert callable(mem.answer) and callable(mem.remember)

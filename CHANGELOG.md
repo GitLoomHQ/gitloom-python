@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.1 — 2026-09-16
+
+- **`openai.gitloom` forwards the whole memory surface.** It already forwarded
+  `recall` and `remember`; `answer`, `vocab` and `skills` were left behind when
+  they were added, so reaching them meant going through `openai.gitloom.memory`
+  with nothing saying so.
+- `vocab` and `skills` are built once per client rather than on every access.
+
+
 ## 0.4.0 — 2026-09-16
 
 - **Recall returns memories.** `res["hits"]` becomes `res["memories"]`, and

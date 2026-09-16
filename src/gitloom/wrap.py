@@ -141,8 +141,9 @@ class GitloomFeatures:
     ``openai.gitloom.conversation("chat-42")`` returns the same managed
     conversation the completions are flowing through, with everything the
     provider SDK lacks: ``rewind``, ``edit``, ``edit_in_place``, ``set_title``,
-    ``branches``, ``compact``, ``ingest``. ``memory`` is the underlying client
-    for direct ``recall``/``remember``/media.
+    ``branches``, ``compact``, ``ingest``. The memory surface is forwarded here
+    too — ``recall``, ``answer``, ``remember``, ``vocab``, ``skills`` — and
+    ``memory`` is the underlying client for media and everything else.
     """
 
     def __init__(self, wrapped: _Wrapped):
@@ -161,8 +162,19 @@ class GitloomFeatures:
     def recall(self, query: str, **kw: Any) -> Any:
         return self._wrapped._memory.recall(query, **kw)
 
+    def answer(self, query: str, **kw: Any) -> Any:
+        return self._wrapped._memory.answer(query, **kw)
+
     def remember(self, messages: Any, **kw: Any) -> Any:
         return self._wrapped._memory.remember(messages, **kw)
+
+    @property
+    def vocab(self) -> Any:
+        return self._wrapped._memory.vocab
+
+    @property
+    def skills(self) -> Any:
+        return self._wrapped._memory.skills
 
 
 def _assistant_text(response: Any) -> Optional[str]:

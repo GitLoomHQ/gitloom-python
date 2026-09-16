@@ -41,6 +41,8 @@ class Gitloom:
     ):
         self.api_key = api_key or os.environ.get("GITLOOM_API_KEY", "")
         self.namespace = namespace
+        self._vocab: Optional["Vocab"] = None
+        self._skills: Optional["Skills"] = None
         self._http = httpx.Client(
             base_url=base_url.rstrip("/"),
             timeout=timeout,
@@ -172,12 +174,16 @@ class Gitloom:
     @property
     def vocab(self) -> "Vocab":
         """The namespace's custom vocabulary: learn, list, look up, forget."""
-        return Vocab(self)
+        if self._vocab is None:
+            self._vocab = Vocab(self)
+        return self._vocab
 
     @property
     def skills(self) -> "Skills":
         """Procedural know-how: store skills, find the one that fits a task."""
-        return Skills(self)
+        if self._skills is None:
+            self._skills = Skills(self)
+        return self._skills
 
     def create_namespace(self, name: str) -> None:
         """Make a namespace exist. Idempotent."""
