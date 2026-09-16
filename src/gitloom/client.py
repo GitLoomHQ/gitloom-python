@@ -8,6 +8,8 @@ from typing import Any, Optional
 
 import httpx
 
+from .memory import Skills, Vocab
+
 DEFAULT_BASE_URL = "https://api.gitloom.cloud"
 
 
@@ -79,24 +81,84 @@ class Gitloom:
         self._request("POST", "/v1/memories", json=body)
 
     def recall(
-        self, query: str, *, namespace: Optional[str] = None, limit: Optional[int] = None
+        self,
+        query: str,
+        *,
+        namespace: Optional[str] = None,
+        limit: Optional[int] = None,
+        mode: Optional[str] = None,
+        tiers: Optional[list[str]] = None,
+        paths: Optional[list[str]] = None,
+        tags: Optional[list[str]] = None,
+        tags_all: Optional[list[str]] = None,
+        since: Any = None,
+        until: Any = None,
+        min_score: Optional[float] = None,
+        context: Optional[bool] = None,
+        detail: Optional[str] = None,
+        include_expired: bool = False,
     ) -> dict[str, Any]:
-        """Retrieve what is known that bears on the query. Every hit carries
-        its evidence: per-arm scores, git history with the last diff, and
-        labelled relation snippets."""
+        """Retrieve what is known that bears on the query.
+
+        Every entry is one whole memory: ``content`` is the body, ``score`` a
+        calibrated relevance in [0, 1] comparable across queries, and
+        ``matched`` the arms that produced it — a memory matched only by
+        ``graph`` is context that rode in beside a real match, not evidence.
+
+        The filters narrow every retrieval arm server-side, so confining a
+        query to a directory is a boundary rather than a cut made afterwards.
+        ``mode`` of ``summary`` or ``agentic`` also returns an ``answer``; both
+        meter as chats rather than reads.
+        """
         params: dict[str, Any] = {"q": query, "namespace": namespace or self.namespace}
         if limit:
             params["limit"] = limit
-        return self._request("GET", "/v1/retrieve", params=params)
+        if mode and mode != "raw":
+            params["mode"] = mode
+        if tiers:
+            params["tiers"] = ",".join(tiers)
+        if paths:
+            params["paths"] = ",".join(paths)
+        if tags:
+            params["tags"] = ",".join(tags)
+        if tags_all:
+            params["tags_all"] = ",".join(tags_all)
+        if since is not None:
+            params["since"] = _as_date(since)
+        if until is not None:
+            params["until"] = _as_date(until)
+        if min_score is not None:
+            params["min_score"] = min_score
+        if context is False:
+            params["context"] = "0"
+        if detail:
+            params["detail"] = detail
+        if include_expired:
+            params["include_expired"] = "1"
+        res = self._request("GET", "/v1/retrieve", params=params) or {}
+        res.setdefault("memories", [])
+        return res
 
-    def context(self, query: str, *, namespace: Optional[str] = None) -> Optional[dict[str, str]]:
+    def answer(self, query: str, *, agentic: bool = False, **kwargs: Any) -> dict[str, Any]:
+        """One text answer to a question, from the memory.
+
+        A fast model summarizes one retrieval by default; ``agentic=True`` lets
+        a stronger model search the memory itself with tools and return its
+        trace. The memories the answer rests on come back alongside. Both
+        meter as chats, not reads.
+        """
+        res = self.recall(query, mode="agentic" if agentic else "summary", **kwargs)
+        if not res.get("answer"):
+            raise GitloomError("no_answer", "The model did not produce an answer", 0)
+        return res
+
+    def context(self, query: str, **kwargs: Any) -> Optional[dict[str, str]]:
         """Retrieval rendered as a system message, ready to prepend. None when
         nothing relevant is stored."""
-        res = self.recall(query, namespace=namespace)
-        hits = res.get("hits") or []
-        if not hits:
+        memories = self.recall(query, **kwargs).get("memories") or []
+        if not memories:
             return None
-        lines = "\n".join(f"- {h['snippet']}" for h in hits)
+        lines = "\n".join(f"- {m.get('content') or m.get('snippet', '')}" for m in memories)
         return {
             "role": "system",
             "content": (
@@ -104,6 +166,18 @@ class Gitloom:
                 "Treat it as background, not as something they just said:\n" + lines
             ),
         }
+
+    # -- vocabulary and skills ---------------------------------------------
+
+    @property
+    def vocab(self) -> "Vocab":
+        """The namespace's custom vocabulary: learn, list, look up, forget."""
+        return Vocab(self)
+
+    @property
+    def skills(self) -> "Skills":
+        """Procedural know-how: store skills, find the one that fits a task."""
+        return Skills(self)
 
     def create_namespace(self, name: str) -> None:
         """Make a namespace exist. Idempotent."""
@@ -153,3 +227,10 @@ def _error_from(res: httpx.Response) -> GitloomError:
     except ValueError:
         pass
     return GitloomError(code, message, res.status_code)
+
+
+def _as_date(value: Any) -> str:
+    """A date filter accepts what the caller already has: a string, or a date
+    or datetime, which the API reads as YYYY-MM-DD or RFC 3339."""
+    isoformat = getattr(value, "isoformat", None)
+    return isoformat() if callable(isoformat) else str(value)

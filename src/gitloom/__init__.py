@@ -10,6 +10,7 @@ from .client import Gitloom, GitloomError
 from .wrap import wrap
 from .conversation import Conversation
 from .media import image_data, image_part, text_part
+from .memory import Skills, Vocab
 from .tokens import context_limit, estimate_tokens, message_tokens, text_of, total_tokens
 
 __all__ = [
@@ -17,6 +18,8 @@ __all__ = [
     "GitloomError",
     "wrap",
     "Conversation",
+    "Vocab",
+    "Skills",
     "context_limit",
     "estimate_tokens",
     "message_tokens",
@@ -27,4 +30,4 @@ __all__ = [
     "image_data",
 ]
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"

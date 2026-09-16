@@ -17,6 +17,11 @@ class FakeAPI:
         self.title = ""
         self.next_seq = 0
         self.branch = "main"
+        self.retrieve_params = []
+        self.skill_params = []
+        self.terms = []
+        self.forgotten = []
+        self.skills = []
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         p = request.url.path
@@ -27,9 +32,40 @@ class FakeAPI:
             self.uploads.append(body["content_type"])
             return ok({"id": f"med-{len(self.uploads)}", "bytes": 42})
         if p == "/v1/retrieve":
-            return ok({"namespace": "ns", "hits": [
-                {"path": "facts/a.md", "score": 0.5, "snippet": "the user prefers Python"}
-            ], "millis": 3})
+            self.retrieve_params.append(dict(request.url.params))
+            if request.url.params.get("mode") in ("summary", "agentic"):
+                return ok({"namespace": "ns", "mode": request.url.params["mode"],
+                           "answer": "They prefer Python.", "model": "haiku",
+                           "memories": [{"path": "facts/a.md", "content": "the user prefers Python",
+                                         "score": 0.9, "matched": ["cue"]}], "millis": 9})
+            return ok({"namespace": "ns", "mode": "raw", "memories": [
+                {"path": "facts/a.md", "tier": "facts", "content": "the user prefers Python",
+                 "score": 0.9, "matched": ["lexical", "cue"]}
+            ], "candidates": 2, "filtered_out": 1, "millis": 3})
+        if p == "/v1/vocab" and request.method == "POST":
+            self.terms += body["terms"]
+            return ok({"id": "j1", "namespace": "ns", "status": "accepted"})
+        if p == "/v1/vocab" and request.method == "DELETE":
+            self.forgotten += request.url.params["term"].split(",")
+            return ok({"id": "j2", "namespace": "ns", "status": "accepted"})
+        if p == "/v1/vocab":
+            word = request.url.params.get("word")
+            if word:
+                if word == "k8s":
+                    return ok({"namespace": "ns", "word": word, "found": True,
+                               "term": {"term": "kubernetes", "aliases": ["k8s"]}})
+                return ok({"namespace": "ns", "word": word, "found": False})
+            return ok({"namespace": "ns", "terms": [{"term": "kubernetes", "aliases": ["k8s"]}]})
+        if p == "/v1/skills" and request.method == "POST":
+            self.skills += body["skills"]
+            return ok({"id": "j3", "namespace": "ns", "status": "accepted",
+                       "paths": ["skills/ops/deploy.md"]})
+        if p == "/v1/skills":
+            self.skill_params.append(dict(request.url.params))
+            return ok({"namespace": "ns", "skills": [
+                {"path": "skills/ops/deploy.md", "name": "Deploy", "content": "Run make deploy.",
+                 "score": 0.8, "matched": ["cue"]}
+            ]})
         if p == "/v1/conversations" and request.method == "POST":
             return ok({"branch": "main", "next_seq": self.next_seq})
         if p.endswith("/messages") and request.method == "POST":
@@ -271,3 +307,105 @@ def test_added_features_live_on_the_wrapped_client(api, client):
     texts = [f"{m['role']}:{m['content']}" for m in seen[-1]["messages"]]
     assert "user:edited" in texts
     assert not any(t == "user:original" for t in texts)
+
+
+def test_recall_returns_memories_and_sends_every_filter():
+    api = FakeAPI()
+    gl = Gitloom("k", namespace="ns", transport=httpx.MockTransport(api.handle))
+
+    res = gl.recall(
+        "what do they like",
+        tiers=["facts", "skills"],
+        paths=["facts/events", "incidents"],
+        tags=["pref"],
+        tags_all=["a", "b"],
+        since="2026-01-01",
+        until="2026-06-30",
+        min_score=0.4,
+        context=False,
+        detail="full",
+        limit=5,
+    )
+    assert res["memories"][0]["content"] == "the user prefers Python"
+    assert res["memories"][0]["matched"] == ["lexical", "cue"]
+    assert res["filtered_out"] == 1
+
+    sent = api.retrieve_params[0]
+    assert sent["tiers"] == "facts,skills"
+    assert sent["paths"] == "facts/events,incidents"
+    assert sent["tags_all"] == "a,b"
+    assert sent["since"] == "2026-01-01"
+    assert sent["min_score"] == "0.4"
+    assert sent["context"] == "0"
+    assert sent["detail"] == "full"
+
+
+def test_recall_leaves_defaults_off_the_wire():
+    api = FakeAPI()
+    gl = Gitloom("k", namespace="ns", transport=httpx.MockTransport(api.handle))
+    gl.recall("x")
+    assert set(api.retrieve_params[0]) == {"q", "namespace"}
+
+
+def test_context_reads_the_whole_memory():
+    api = FakeAPI()
+    gl = Gitloom("k", namespace="ns", transport=httpx.MockTransport(api.handle))
+    msg = gl.context("what do they like")
+    assert msg["role"] == "system"
+    assert "the user prefers Python" in msg["content"]
+
+
+def test_answer_asks_for_a_summary_and_agentic_on_request():
+    api = FakeAPI()
+    gl = Gitloom("k", namespace="ns", transport=httpx.MockTransport(api.handle))
+
+    res = gl.answer("what do they like")
+    assert res["answer"] == "They prefer Python."
+    assert api.retrieve_params[0]["mode"] == "summary"
+
+    gl.answer("what do they like", agentic=True)
+    assert api.retrieve_params[1]["mode"] == "agentic"
+
+
+def test_answer_refuses_to_return_nothing_silently():
+    api = FakeAPI()
+
+    def no_answer(request):
+        return httpx.Response(200, json={"namespace": "ns", "mode": "summary", "memories": []})
+
+    gl = Gitloom("k", namespace="ns", transport=httpx.MockTransport(no_answer))
+    with pytest.raises(GitloomError) as e:
+        gl.answer("x")
+    assert e.value.code == "no_answer"
+
+
+def test_vocab_round_trip():
+    api = FakeAPI()
+    gl = Gitloom("k", namespace="ns", transport=httpx.MockTransport(api.handle))
+
+    gl.vocab.learn([{"term": "kubernetes", "aliases": ["k8s"], "definition": "Orchestration."}])
+    assert api.terms[0]["term"] == "kubernetes"
+
+    assert gl.vocab.list()[0]["term"] == "kubernetes"
+    assert gl.vocab.lookup("k8s")["term"] == "kubernetes"
+    assert gl.vocab.lookup("zzz") is None
+
+    gl.vocab.forget(["kubernetes", "postgres"])
+    assert api.forgotten == ["kubernetes", "postgres"]
+
+
+def test_skills_store_and_find():
+    api = FakeAPI()
+    gl = Gitloom("k", namespace="ns", transport=httpx.MockTransport(api.handle))
+
+    stored = gl.skills.store([{"name": "Deploy", "topic": "ops", "content": "Run make deploy."}])
+    assert stored["paths"] == ["skills/ops/deploy.md"]
+    assert api.skills[0]["name"] == "Deploy"
+
+    found = gl.skills.find("ship a release", paths=["ops"], limit=3)
+    assert found[0]["name"] == "Deploy"
+    assert api.skill_params[0]["q"] == "ship a release"
+    assert api.skill_params[0]["paths"] == "ops"
+
+    gl.skills.list()
+    assert "q" not in api.skill_params[1]
