@@ -13,7 +13,7 @@ concurrency:
 
 permissions:
   contents: read
-  id-token: write # for PyPI trusted publishing, if you enable it later
+  id-token: write # the publish credential itself, via trusted publishing
 
 jobs:
   publish:
@@ -44,9 +44,6 @@ jobs:
 
       - run: uv build
 
-      # Token auth. To move to trusted publishing instead, configure this repo
-      # and workflow as a publisher on PyPI and drop the `password` line —
-      # id-token: write above is already granted.
+      # No password: this repo and workflow are registered as a trusted
+      # publisher on PyPI, so the id-token permission above is the credential.
       - uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          password: ${{ secrets.PYPI_API_TOKEN }}
