@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- **`recall()` and `answer()` take `rank`, `max_chars` and `model`.**
+  `rank="fused"` or `rank="jev"` retrieves on the lane path, which also
+  reaches conversation turns and the dates in a question; `max_chars` caps the
+  memory content returned; `model="haiku"` or `model="sonnet"` picks the
+  reader in `summary` or `agentic` mode. None is sent unless set, so existing
+  calls are unchanged.
+- **Lane-path fields.** Memories carry `store`, `said` and `excerpted`, and
+  `matched` can name `time`; the result carries `rank` and `rank_fallback`,
+  and `timings` the lane path's `embed_ms`, `lanes_ms`, `rank_ms` and
+  per-lane `lane`.
+
+
 ## 0.4.1 — 2026-09-16
 
 - **`openai.gitloom` forwards the whole memory surface.** It already forwarded

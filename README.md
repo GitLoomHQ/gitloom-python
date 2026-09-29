@@ -102,6 +102,28 @@ last diff, labelled relation snippets and cues.
 `answer` is metered as a chat, not a read, and raises rather than handing back
 an empty string when the model finds nothing to say.
 
+### The lane path
+
+`rank` retrieves on the lane path: lexical, cue, body, graph and time lanes each
+search on their own, over the curated memories and the conversation turns, and
+the time lane reads dates in the question ("last month", "in May"). `fused`
+orders what they find by lane score; `jev` has a ranking model order it, and
+sets `rank_fallback` when it answers in lane order instead.
+
+```python
+res = memory.recall("when did I stake the tomatoes", rank="fused", max_chars=8000)
+for m in res["memories"]:
+    print(m.get("store"), m.get("said"), m.get("excerpted"), m["content"])
+
+print(memory.answer("what did I plant after the storm", rank="jev", model="sonnet")["answer"])
+```
+
+Each memory then says which `store` it came from (`memory`, or a word-for-word
+conversation `turn`) and the days it was `said`. `max_chars` caps the memory
+content returned: a memory that does not fit is cut to its opening sentence and
+the sentences matching the question, and marked `excerpted`. `model` picks the
+model that reads the memories in `summary` or `agentic` mode.
+
 ## Vocabulary and skills
 
 ```python
