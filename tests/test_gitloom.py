@@ -379,6 +379,55 @@ def test_answer_refuses_to_return_nothing_silently():
     assert e.value.code == "no_answer"
 
 
+def test_lane_path_sends_rank_max_chars_and_model_and_reads_its_fields():
+    seen = []
+
+    def lane(request):
+        seen.append(dict(request.url.params))
+        return httpx.Response(200, json={
+            "namespace": "ns", "mode": "summary", "answer": "May 21.",
+            "rank": "jev", "rank_fallback": True,
+            "memories": [{"path": "turns/conv-1/main/000001-user-aa.md", "tier": "facts",
+                          "content": "user: I staked the tomatoes …", "score": 0.8,
+                          "matched": ["lexical", "time"], "store": "turn",
+                          "said": ["2026-05-21"], "excerpted": True}],
+            "candidates": 9, "filtered_out": 0, "millis": 40,
+            "timings": {"lexical_ms": 0, "vector_ms": 0, "graph_ms": 0,
+                        "embed_ms": 20, "lanes_ms": 8, "rank_ms": 300,
+                        "lane": [{"lane": "time", "store": "turn", "ms": 2, "n": 1}]},
+        })
+
+    gl = Gitloom("k", namespace="ns", transport=httpx.MockTransport(lane))
+    res = gl.recall("x", mode="summary", rank="jev", max_chars=12000, model="sonnet")
+
+    assert [seen[0].get(k) for k in ("rank", "max_chars", "model")] == ["jev", "12000", "sonnet"]
+    assert res["rank"] == "jev"
+    assert res["rank_fallback"] is True
+    m = res["memories"][0]
+    assert [m["store"], m["said"], m["excerpted"]] == ["turn", ["2026-05-21"], True]
+    assert "time" in m["matched"]
+    assert res["timings"]["rank_ms"] == 300
+    assert res["timings"]["lane"][0]["lane"] == "time"
+
+
+def test_lane_path_stays_off_the_wire_unless_asked():
+    api = FakeAPI()
+    gl = Gitloom("k", namespace="ns", transport=httpx.MockTransport(api.handle))
+    res = gl.recall("x", rank=None, max_chars=0, model=None)
+    gl.recall("x", max_chars=-1)
+    assert all(set(sent) == {"q", "namespace"} for sent in api.retrieve_params)
+    assert "rank" not in res
+    assert "rank_fallback" not in res
+
+
+def test_answer_passes_the_lane_path_through():
+    api = FakeAPI()
+    gl = Gitloom("k", namespace="ns", transport=httpx.MockTransport(api.handle))
+    gl.answer("x", rank="fused", model="haiku", max_chars=8000)
+    sent = api.retrieve_params[0]
+    assert [sent.get(k) for k in ("mode", "rank", "model", "max_chars")] == ["summary", "fused", "haiku", "8000"]
+
+
 def test_vocab_round_trip():
     api = FakeAPI()
     gl = Gitloom("k", namespace="ns", transport=httpx.MockTransport(api.handle))

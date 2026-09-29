@@ -99,6 +99,9 @@ class Gitloom:
         context: Optional[bool] = None,
         detail: Optional[str] = None,
         include_expired: bool = False,
+        rank: Optional[str] = None,
+        max_chars: Optional[int] = None,
+        model: Optional[str] = None,
     ) -> dict[str, Any]:
         """Retrieve what is known that bears on the query.
 
@@ -111,6 +114,14 @@ class Gitloom:
         query to a directory is a boundary rather than a cut made afterwards.
         ``mode`` of ``summary`` or ``agentic`` also returns an ``answer``; both
         meter as chats rather than reads.
+
+        ``rank`` of ``fused`` or ``jev`` retrieves on the lane path, which also
+        reaches conversation turns and the dates in a question; each memory
+        then carries its ``store`` and the days it was ``said``, and ``jev``
+        sets ``rank_fallback`` when it answers in lane order. ``max_chars``
+        caps the memory content returned, marking what it cut ``excerpted``.
+        ``model`` of ``haiku`` or ``sonnet`` picks the reader in ``summary`` or
+        ``agentic`` mode.
         """
         params: dict[str, Any] = {"q": query, "namespace": namespace or self.namespace}
         if limit:
@@ -137,6 +148,12 @@ class Gitloom:
             params["detail"] = detail
         if include_expired:
             params["include_expired"] = "1"
+        if rank:
+            params["rank"] = rank
+        if max_chars and max_chars > 0:
+            params["max_chars"] = max_chars
+        if model:
+            params["model"] = model
         res = self._request("GET", "/v1/retrieve", params=params) or {}
         res.setdefault("memories", [])
         return res
