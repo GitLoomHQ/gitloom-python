@@ -41,9 +41,15 @@
 - **Breaking:** a 401 or 403 without the envelope, the gateway refusing a
   key, is now `unauthorized`, with a message pointing at the API key. It was
   `http_error`, with the gateway's `Forbidden` or `Unauthorized`.
-- **Breaking:** a client built with no key, or an empty or blank one, raises
-  `missing_api_key` at construction, before any request. It used to build,
-  then fail on the first request with an httpx `LocalProtocolError`.
+- **Breaking:** `Gitloom()` without a key now raises `missing_api_key`
+  immediately, at construction, so code that builds the client at import
+  time, before loading dotenv, will raise. A key that is empty or blank after
+  trimming counts as none. It used to build, then fail on the first request
+  with an httpx `LocalProtocolError`.
+- **Breaking:** the key, from the argument or `GITLOOM_API_KEY`, is trimmed,
+  and one with whitespace or control characters inside raises
+  `invalid_api_key` at construction, without the key in its message. httpx
+  used to refuse it on the first request with the key in the error text.
 - **Breaking:** transport failures raise `GitloomError` (`network_error` or
   `timeout`) rather than the httpx exception, which is now its `__cause__`.
 - **Breaking:** a memory's `created_at`, `updated_at`, `occurred_at` and

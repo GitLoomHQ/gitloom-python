@@ -241,11 +241,19 @@ openai.chat.completions.create(
 A refused or failed call raises `GitloomError`, with a `code`, a `message` and
 the HTTP `status` (0 when no response came back). The API's own codes arrive as
 sent: `invalid_tag`, `quota_exceeded`, `rate_limited`, `namespace_not_found`
-and the rest. The SDK adds `missing_api_key` (no key at construction),
-`unauthorized` (the key was refused), `missing_query` (a recall with neither
-query nor filter), `network_error` (no response), `timeout`, and
-`http_<status>` for anything else. On a 429, `retry_after` holds the seconds
-the server asked you to wait, when it said; the SDK never retries by itself.
+and the rest. The SDK adds:
+
+- `missing_api_key` and `invalid_api_key`, raised by `Gitloom()` itself,
+  before any request: no key in the argument or `GITLOOM_API_KEY`, or one
+  with whitespace or control characters inside. Surrounding whitespace is
+  trimmed. Build the client after loading your `.env`, not at import time.
+- `unauthorized`: the key was refused.
+- `missing_query`: a recall with neither a query nor a filter.
+- `network_error` (no response) and `timeout`.
+- `http_<status>` for anything else.
+
+On a 429, `retry_after` holds the seconds the server asked you to wait, when
+it said; the SDK never retries by itself.
 
 ## Docs
 

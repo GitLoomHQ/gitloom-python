@@ -41,8 +41,9 @@ class MissingQueryError(GitloomError, ValueError):
 
 
 class Gitloom:
-    """The client. `Gitloom()` reads GITLOOM_API_KEY from the environment,
-    and raises ``GitloomError("missing_api_key")`` when there is none.
+    """The client. `Gitloom()` reads GITLOOM_API_KEY from the environment.
+    Building it raises ``missing_api_key`` without a key, and
+    ``invalid_api_key`` for one with whitespace or control characters inside.
 
     Writes are never retried: a retried write that half-succeeded
     double-charges the meter and double-stores the message.
@@ -57,10 +58,19 @@ class Gitloom:
         timeout: float = 60.0,
         transport: Optional[httpx.BaseTransport] = None,
     ):
-        self.api_key = api_key or os.environ.get("GITLOOM_API_KEY", "")
-        self._timeout = timeout
-        if not self.api_key.strip():
+        key = (api_key or "").strip() or os.environ.get("GITLOOM_API_KEY", "").strip()
+        if not key:
             raise GitloomError("missing_api_key", "No API key. Pass api_key= or set GITLOOM_API_KEY.", 0)
+        # httpx echoes a header value it refuses, so a malformed key must never reach it.
+        if any(not 0x21 <= ord(c) <= 0x7E for c in key):
+            raise GitloomError(
+                "invalid_api_key",
+                "The API key contains whitespace or control characters — check GITLOOM_API_KEY, "
+                "or the key passed to the client.",
+                0,
+            )
+        self.api_key = key
+        self._timeout = timeout
         self.namespace = namespace
         self._vocab: Optional["Vocab"] = None
         self._skills: Optional["Skills"] = None

@@ -102,8 +102,50 @@ def test_the_key_can_come_from_the_environment(monkeypatch):
     monkeypatch.setenv("GITLOOM_API_KEY", " ")
     with pytest.raises(GitloomError):
         Gitloom()
-    monkeypatch.setenv("GITLOOM_API_KEY", "gl_from_env")
+    monkeypatch.setenv("GITLOOM_API_KEY", "gl_from_env\n")
     assert Gitloom().api_key == "gl_from_env"
+    assert Gitloom("  ").api_key == "gl_from_env"
+
+
+def test_a_key_is_trimmed_before_it_is_sent(monkeypatch):
+    monkeypatch.delenv("GITLOOM_API_KEY", raising=False)
+    sent = []
+
+    def ok(request):
+        sent.append(request.headers["authorization"])
+        return httpx.Response(200, json={"memories": []})
+
+    Gitloom("glk_SECRET\n", transport=httpx.MockTransport(ok)).recall("x")
+    Gitloom(" \tglk_SECRETabc\r\n", transport=httpx.MockTransport(ok)).recall("x")
+    assert sent == ["Bearer glk_SECRET", "Bearer glk_SECRETabc"]
+
+
+INVALID_KEY = ("The API key contains whitespace or control characters — check GITLOOM_API_KEY, "
+               "or the key passed to the client.")
+
+
+@pytest.mark.parametrize("key, probe", [
+    ("glk_SEC\r\nRET", "SEC"),
+    ("glk_SECRET\r\nX: y", "SECRET"),
+    ("glk_SEC RET", "SEC"),
+    ("glk_SEC\tRET", "SEC"),
+    ("glk_SEC\x00RET", "SEC"),
+    ("glk_SECRÉT", "SECR"),
+])
+def test_a_key_with_whitespace_or_control_characters_inside_is_refused(monkeypatch, key, probe):
+    monkeypatch.delenv("GITLOOM_API_KEY", raising=False)
+    sent = []
+    with pytest.raises(GitloomError) as e:
+        Gitloom(key, transport=httpx.MockTransport(lambda r: sent.append(r)))
+    assert (e.value.code, e.value.status, e.value.message) == ("invalid_api_key", 0, INVALID_KEY)
+    assert sent == []
+    _assert_no_key(e.value, probe)
+
+    if "\x00" not in key:
+        monkeypatch.setenv("GITLOOM_API_KEY", key)
+        with pytest.raises(GitloomError) as e:
+            Gitloom()
+        assert e.value.code == "invalid_api_key"
 
 
 def test_a_transport_failure_is_a_network_error():
@@ -147,16 +189,15 @@ class _Forbidden(http.server.BaseHTTPRequestHandler):
         pass
 
 
-def _caught(base_url, timeout=5.0):
-    gl = Gitloom(PROBE, base_url=base_url, timeout=timeout)
+def _caught(key, base_url, timeout=5.0):
     try:
-        gl.recall("x", tags=["probe"])
+        Gitloom(key, base_url=base_url, timeout=timeout).recall("x", tags=["probe"])
     except GitloomError as e:
         return e
     raise AssertionError("the request did not fail")
 
 
-def _assert_no_key(e):
+def _assert_no_key(e, probe=PROBE):
     chain, seen = [], e
     while seen is not None and seen not in chain:
         chain.append(seen)
@@ -166,35 +207,44 @@ def _assert_no_key(e):
         texts += [str(x), repr(x), repr(vars(x)), repr(x.args)]
         if isinstance(x, httpx.RequestError):
             texts += [repr(x.request), repr(x.request.headers), str(x.request.url)]
-    assert not [t for t in texts if PROBE in t]
+    assert not [t for t in texts if probe in t]
     return chain
 
 
-def test_the_key_never_reaches_an_error():
+@pytest.mark.parametrize("key, probe, refused_as", [
+    (PROBE, PROBE, None),
+    ("glk_SECRET\n", "glk_SECRET", None),
+    ("glk_SECRETabc\n", "glk_SECRETabc", None),
+    ("glk_SEC\r\nRET", "SEC", "invalid_api_key"),
+    ("glk_SECRET\r\nX: y", "SECRET", "invalid_api_key"),
+])
+def test_the_key_never_reaches_an_error(key, probe, refused_as):
     server = http.server.HTTPServer(("127.0.0.1", 0), _Forbidden)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
-        e = _caught(f"http://127.0.0.1:{server.server_address[1]}")
+        e = _caught(key, f"http://127.0.0.1:{server.server_address[1]}")
     finally:
         server.shutdown()
         server.server_close()
-    assert e.code == "unauthorized"
-    _assert_no_key(e)
+    assert e.code == (refused_as or "unauthorized")
+    _assert_no_key(e, probe)
 
     closed = socket.socket()
     closed.bind(("127.0.0.1", 0))
     port = closed.getsockname()[1]
     closed.close()
-    e = _caught(f"http://127.0.0.1:{port}")
-    assert e.code == "network_error"
-    assert len(_assert_no_key(e)) > 1
+    e = _caught(key, f"http://127.0.0.1:{port}")
+    assert e.code == (refused_as or "network_error")
+    chain = _assert_no_key(e, probe)
+    assert refused_as or len(chain) > 1
 
     silent = socket.socket()
     silent.bind(("127.0.0.1", 0))
     silent.listen(1)
     try:
-        e = _caught(f"http://127.0.0.1:{silent.getsockname()[1]}", timeout=0.3)
+        e = _caught(key, f"http://127.0.0.1:{silent.getsockname()[1]}", timeout=0.3)
     finally:
         silent.close()
-    assert e.code == "timeout"
-    assert len(_assert_no_key(e)) > 1
+    assert e.code == (refused_as or "timeout")
+    chain = _assert_no_key(e, probe)
+    assert refused_as or len(chain) > 1
