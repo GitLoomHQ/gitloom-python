@@ -523,6 +523,31 @@ def test_recall_reads_times_as_aware_datetimes():
     assert second["occurred_source"] is None and second["occurred_precision"] is None
 
 
+def test_recall_reads_iso_times_as_the_same_datetimes():
+    import datetime as dt
+
+    seen = []
+    gl = _recording(seen, {"namespace": "ns", "mode": "raw", "memories": [
+        {"path": "facts/a.md", "content": "a", "score": 1,
+         "created_at": "2026-10-04T19:03:23+05:30", "updated_at": "2026-10-04T13:33:23Z",
+         "occurred_at": "2026-03-05T12:00:00Z", "expires_at": "not a time",
+         "tags": None, "user_tags": None},
+    ]})
+    m = gl.recall(
+        "x", tiers=["facts"], paths=["facts"], tags=["a"], tags_all=["b"], since=1, until=2,
+        time_field="occurred", tz="Asia/Kolkata", min_score=0.1, context=False, detail="full",
+        include_expired=True, rank="fused", max_chars=500, model="haiku", limit=3,
+    )["memories"][0]
+
+    utc = dt.timezone.utc
+    assert m["created_at"] == m["updated_at"] == dt.datetime(2026, 10, 4, 13, 33, 23, tzinfo=utc)
+    assert m["created_at"].utcoffset() == dt.timedelta(0)
+    assert m["occurred_at"] == dt.datetime(2026, 3, 5, 12, 0, tzinfo=utc)
+    assert m["expires_at"] == "not a time"
+    assert m["tags"] == [] and m["user_tags"] == []
+    assert "time_format" not in seen[0].url.params
+
+
 def test_retrieve_refusals_carry_their_codes():
     for status, body, code in (
         (400, {"error": {"code": "invalid_tag", "message": "tags[0] \"a+b\" has a character not allowed"}}, "invalid_tag"),

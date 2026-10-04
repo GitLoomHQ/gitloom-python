@@ -23,13 +23,16 @@ _TIMES = ("created_at", "updated_at", "occurred_at", "expires_at")
 
 
 class GitloomError(Exception):
-    """A refusal from the API, carrying its machine-readable code."""
+    """A refusal from the API, carrying its machine-readable code.
+    ``retry_after`` is the seconds a 429's Retry-After asked for, else None;
+    the SDK never retries on its own."""
 
-    def __init__(self, code: str, message: str, status: int):
+    def __init__(self, code: str, message: str, status: int, *, retry_after: Optional[int] = None):
         super().__init__(f"{message} ({status} {code})")
         self.code = code
         self.message = message
         self.status = status
+        self.retry_after = retry_after
 
 
 class MissingQueryError(GitloomError, ValueError):
@@ -55,6 +58,7 @@ class Gitloom:
         transport: Optional[httpx.BaseTransport] = None,
     ):
         self.api_key = api_key or os.environ.get("GITLOOM_API_KEY", "")
+        self._timeout = timeout
         if not self.api_key.strip():
             raise GitloomError("missing_api_key", "No API key. Pass api_key= or set GITLOOM_API_KEY.", 0)
         self.namespace = namespace
@@ -77,6 +81,8 @@ class Gitloom:
             url += "?" + qs
         try:
             res = self._http.request(method, url, json=json)
+        except httpx.TimeoutException as e:
+            raise GitloomError("timeout", f"Request timed out after {self._timeout:g}s", 0) from e
         except httpx.TransportError as e:
             raise GitloomError("network_error", str(e) or type(e).__name__, 0) from e
         if res.status_code >= 400:
@@ -421,18 +427,29 @@ class Gitloom:
 
 
 _GATEWAY_REFUSALS = {
-    401: "No API key was accepted (401 Unauthorized) — check GITLOOM_API_KEY.",
-    403: "The API key was not accepted (403 Forbidden) — check GITLOOM_API_KEY, "
-    "or whether the key has been revoked.",
+    401: "No API key was accepted (401 Unauthorized) — check the API key "
+    "(GITLOOM_API_KEY, or the key passed to the client).",
+    403: "The API key was not accepted (403 Forbidden) — check the API key "
+    "(GITLOOM_API_KEY, or the key passed to the client), or whether it has been revoked.",
 }
+
+_UNREAD = object()
 
 
 def _error_from(res: httpx.Response) -> GitloomError:
+    e = _refusal(res)
+    retry_after = res.headers.get("retry-after", "").strip()
+    if res.status_code == 429 and retry_after.isdigit():
+        e.retry_after = int(retry_after)
+    return e
+
+
+def _refusal(res: httpx.Response) -> GitloomError:
     status = res.status_code
     try:
         body = res.json()
     except ValueError:
-        body = None
+        body = _UNREAD
     err = body.get("error") if isinstance(body, dict) else None
     if isinstance(err, dict):
         code = err.get("code") or f"http_{status}"
@@ -449,11 +466,30 @@ def _fallback_message(res: httpx.Response, body: Any) -> str:
     if isinstance(body, dict) and isinstance(body.get("message"), str) and body["message"]:
         return body["message"]
     text = res.text.strip()
-    return text[:300] if text else _reason(res)
+    return text[:300] if text and body is not None else _reason(res)
 
 
 def _reason(res: httpx.Response) -> str:
     return res.reason_phrase or httpx.codes.get_reason_phrase(res.status_code) or f"HTTP {res.status_code}"
+
+
+def _read_time(v: Any) -> Any:
+    """Epoch seconds, or the RFC 3339 that time_format=iso renders, as an
+    aware UTC datetime. Anything unreadable is left as it came."""
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return dt.datetime.fromtimestamp(v, tz=dt.timezone.utc)
+    if isinstance(v, str):
+        s = v.strip()
+        if not s:
+            return None
+        try:
+            t = dt.datetime.fromisoformat(s[:-1] + "+00:00" if s[-1] in "Zz" else s)
+        except ValueError:
+            return v
+        if t.tzinfo is None:
+            t = t.replace(tzinfo=dt.timezone.utc)
+        return t.astimezone(dt.timezone.utc)
+    return v
 
 
 def _when(value: When) -> Union[int, str]:
@@ -478,11 +514,7 @@ def _when(value: When) -> Union[int, str]:
 
 def _read_memory(m: dict[str, Any]) -> None:
     for k in _TIMES:
-        v = m.get(k)
-        if isinstance(v, (int, float)) and not isinstance(v, bool):
-            m[k] = dt.datetime.fromtimestamp(v, tz=dt.timezone.utc)
-        elif v is None:
-            m[k] = None
+        m[k] = _read_time(m.get(k))
     for k in ("user_tags", "tags"):
         if m.get(k) is None:
             m[k] = []

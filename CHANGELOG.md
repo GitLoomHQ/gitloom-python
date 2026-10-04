@@ -22,22 +22,36 @@
   `occurred_source`, `occurred_precision` and `user_tags`. The `created` and
   `updated` strings are deprecated.
 - **`get()` reads like `recall()`.** Its `created_at`, `updated_at`,
-  `occurred_at` and `expires_at` are aware UTC datetimes too, and on both an
-  untagged memory has `tags` and `user_tags` of `[]` rather than None.
+  `occurred_at` and `expires_at` are aware UTC datetimes too. A time sent as
+  RFC 3339 reads into the same datetime as one sent as epoch seconds.
 - **One error contract across the SDKs.** An error the API sends in its
-  `{"error": {"code", "message"}}` envelope keeps its code and message. A 401
-  or 403 without it, the gateway refusing a key, is `unauthorized`, with a
-  message pointing at `GITLOOM_API_KEY`. Building a client with no key raises
-  `missing_api_key`, and a request that got no response (connection failure,
-  timeout) raises `network_error` with the httpx exception as its cause; both
-  have status 0. An error body that is not a JSON object no longer crashes the
-  error handling.
-- **Changed:** an error without the envelope had code `http_error`; it is now
-  `http_<status>`, e.g. `http_500`, with the body's `message`, its text, or
-  the HTTP reason as the message.
-- **Changed:** a naive `datetime` passed to `since` or `until` is read as UTC;
-  it used to be sent without an offset and read in `tz`, else UTC. Query
-  values encode a space as `%20` rather than `+`.
+  `{"error": {"code", "message"}}` envelope keeps its code and message, and
+  the older flat `{"error": "..."}` keeps its text. An empty, blank or JSON
+  `null` body reads as the HTTP status text; other JSON that is not an object
+  reads as its text, and no longer crashes the error handling. A failed
+  connection raises `network_error` and a timeout `timeout`, both status 0,
+  with the httpx exception as the cause. No error, string form or cause
+  carries the API key.
+- **`retry_after`.** A 429 whose `Retry-After` holds whole seconds sets
+  `GitloomError.retry_after`; it is None otherwise. The SDK never retries on
+  its own.
+- **Breaking:** an error without the envelope had code `http_error`; it is
+  now `http_<status>`, e.g. `http_500`, with the body's `message`, its text,
+  or the HTTP status text as the message.
+- **Breaking:** a 401 or 403 without the envelope, the gateway refusing a
+  key, is now `unauthorized`, with a message pointing at the API key. It was
+  `http_error`, with the gateway's `Forbidden` or `Unauthorized`.
+- **Breaking:** a client built with no key, or an empty or blank one, raises
+  `missing_api_key` at construction, before any request. It used to build,
+  then fail on the first request with an httpx `LocalProtocolError`.
+- **Breaking:** transport failures raise `GitloomError` (`network_error` or
+  `timeout`) rather than the httpx exception, which is now its `__cause__`.
+- **Breaking:** a memory's `created_at`, `updated_at`, `occurred_at` and
+  `expires_at` are datetimes, and its `tags` and `user_tags` are `[]` when the
+  server sends null. 0.4.x passed the server's integers and nulls through.
+- **Breaking:** a naive `datetime` passed to `since` or `until` is read as
+  UTC; it used to be sent without an offset and read in `tz`, else UTC.
+- **Changed:** query values encode a space as `%20` rather than `+`.
 - **`recall()` and `answer()` take `rank`, `max_chars` and `model`.**
   `rank="fused"` or `rank="jev"` retrieves on the lane path, which also
   reaches conversation turns and the dates in a question; `max_chars` caps the
