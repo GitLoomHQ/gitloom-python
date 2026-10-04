@@ -428,6 +428,109 @@ def test_answer_passes_the_lane_path_through():
     assert [sent.get(k) for k in ("mode", "rank", "model", "max_chars")] == ["summary", "fused", "haiku", "8000"]
 
 
+def _recording(seen, reply=None):
+    def handle(request):
+        seen.append(request)
+        return httpx.Response(200, json=reply or {"namespace": "ns", "mode": "raw", "memories": []})
+    return Gitloom("k", namespace="ns", transport=httpx.MockTransport(handle))
+
+
+def test_recall_encodes_tags_and_times():
+    import datetime as dt
+
+    seen = []
+    gl = _recording(seen)
+    gl.recall(
+        "what shipped",
+        tags=["#launch", "team a"],
+        tags_all=["q4"],
+        since=dt.datetime(2026, 10, 1, 9, 0, tzinfo=dt.timezone(dt.timedelta(hours=5, minutes=30))),
+        until=dt.date(2026, 10, 3),
+        time_field="occurred",
+        tz="Asia/Kolkata",
+    )
+    raw = seen[0].url.query.decode()
+    # An unencoded # ends the query string there; a + is a space only to some decoders.
+    assert "tags=%23launch%2Cteam%20a" in raw
+    assert "+" not in raw and "#" not in raw
+    sent = seen[0].url.params
+    assert sent["since"] == str(int(dt.datetime(2026, 10, 1, 3, 30, tzinfo=dt.timezone.utc).timestamp()))
+    assert sent["until"] == "2026-10-03"
+    assert [sent["time_field"], sent["tz"], sent["tags_all"]] == ["occurred", "Asia/Kolkata", "q4"]
+
+    gl.recall("x", since=dt.datetime(2026, 10, 1), until=1790000000.75)
+    assert seen[1].url.params["since"] == str(int(dt.datetime(2026, 10, 1, tzinfo=dt.timezone.utc).timestamp()))
+    assert seen[1].url.params["until"] == "1790000000"
+
+
+def test_recall_lists_by_filter_without_a_query():
+    seen = []
+    gl = _recording(seen)
+    gl.recall(tags=["#launch"])
+    gl.recall(since="2026-10-01", time_field="created")
+    gl.recall(None, tiers=["facts"])
+    gl.recall("  ", paths=["facts/events"])
+    assert all("q" not in r.url.params for r in seen)
+    assert len(seen) == 4
+
+    assert gl.context(tags=["#launch"]) is None
+    assert "q" not in seen[-1].url.params
+
+
+def test_recall_with_neither_query_nor_filter_raises_before_sending():
+    seen = []
+    gl = _recording(seen)
+    for kwargs in ({}, {"time_field": "occurred", "tz": "UTC"}, {"tags": []}, {"limit": 5}):
+        with pytest.raises(ValueError, match="query, or a filter"):
+            gl.recall(**kwargs)
+    with pytest.raises(ValueError):
+        gl.recall("   ")
+    with pytest.raises(ValueError):
+        gl.context()
+    assert seen == []
+
+
+def test_recall_reads_times_as_aware_datetimes():
+    import datetime as dt
+
+    gl = _recording([], {"namespace": "ns", "mode": "raw", "memories": [
+        {"path": "facts/launch.md", "content": "We shipped.", "score": 1,
+         "tags": ["#launch", "release"], "user_tags": ["#launch"],
+         "created_at": 1790000000, "updated_at": 1790003600, "occurred_at": 1789992000,
+         "occurred_source": "user", "occurred_precision": "day",
+         "created": "2026-09-21T14:13:20Z", "updated": "2026-09-21T15:13:20Z"},
+        {"path": "facts/old.md", "content": "Older.", "score": 1},
+    ]})
+    first, second = gl.recall(tags=["#launch"])["memories"]
+
+    assert first["created_at"] == dt.datetime(2026, 9, 21, 14, 13, 20, tzinfo=dt.timezone.utc)
+    assert first["updated_at"] - first["created_at"] == dt.timedelta(hours=1)
+    assert first["occurred_at"] == dt.datetime(2026, 9, 21, 12, 0, tzinfo=dt.timezone.utc)
+    assert first["occurred_at"].utcoffset() == dt.timedelta(0)
+    assert first["expires_at"] is None
+    assert [first["occurred_source"], first["occurred_precision"]] == ["user", "day"]
+    assert first["user_tags"] == ["#launch"]
+    assert first["created"] == "2026-09-21T14:13:20Z"
+
+    assert [second[k] for k in ("created_at", "updated_at", "occurred_at", "expires_at")] == [None] * 4
+    assert second["user_tags"] == []
+    assert second["occurred_source"] is None and second["occurred_precision"] is None
+
+
+def test_retrieve_refusals_carry_their_codes():
+    for status, body, code in (
+        (400, {"error": {"code": "invalid_tag", "message": "tags[0] \"a+b\" has a character not allowed"}}, "invalid_tag"),
+        (400, {"error": {"code": "invalid_date", "message": "since is after until"}}, "invalid_date"),
+        (400, {"error": "q is required"}, "http_error"),
+    ):
+        gl = Gitloom("k", namespace="ns",
+                     transport=httpx.MockTransport(lambda r, s=status, b=body: httpx.Response(s, json=b)))
+        with pytest.raises(GitloomError) as e:
+            gl.recall("x", since="2026-10-02", until="2026-10-01")
+        assert (e.value.code, e.value.status) == (code, 400)
+        assert e.value.message in str(body)
+
+
 def test_vocab_round_trip():
     api = FakeAPI()
     gl = Gitloom("k", namespace="ns", transport=httpx.MockTransport(api.handle))
@@ -473,3 +576,6 @@ def test_memory_surface_is_reachable_from_the_wrapper(api, client):
     assert mem.skills is client.skills
     assert mem.memory is client
     assert callable(mem.answer) and callable(mem.remember)
+    for name in ("write", "get", "forget", "tree", "topics", "graph"):
+        assert callable(getattr(mem, name)) and callable(getattr(client, name))
+    assert mem.recall(tags=["pref"])["memories"]

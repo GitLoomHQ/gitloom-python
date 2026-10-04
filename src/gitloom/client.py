@@ -3,14 +3,23 @@
 from __future__ import annotations
 
 import base64
+import datetime as dt
+import math
 import os
-from typing import Any, Optional
+import warnings
+from typing import Any, Optional, Union
+from urllib.parse import quote, urlencode
 
 import httpx
 
 from .memory import Skills, Vocab
 
 DEFAULT_BASE_URL = "https://api.gitloom.cloud"
+
+When = Union[dt.datetime, dt.date, int, float, str]
+
+_FILTERS = ("tags", "tags_all", "since", "until", "tiers", "paths")
+_TIMES = ("created_at", "updated_at", "occurred_at", "expires_at")
 
 
 class GitloomError(Exception):
@@ -53,7 +62,12 @@ class Gitloom:
     # -- transport ---------------------------------------------------------
 
     def _request(self, method: str, path: str, *, json: Any = None, params: Any = None) -> Any:
-        res = self._http.request(method, path, json=json, params=params)
+        url = path
+        # %20, not +, for a space: a + reads as a space only to form decoders.
+        qs = urlencode({k: v for k, v in (params or {}).items() if v is not None}, quote_via=quote, safe="")
+        if qs:
+            url += "?" + qs
+        res = self._http.request(method, url, json=json)
         if res.status_code >= 400:
             raise _error_from(res)
         if not res.content:
@@ -71,20 +85,142 @@ class Gitloom:
         *,
         namespace: Optional[str] = None,
         session_id: Optional[str] = None,
+        tags: Optional[list[str]] = None,
+        occurred_at: Optional[When] = None,
+        timezone: Optional[str] = None,
         date: Optional[str] = None,
     ) -> None:
         """Submit a conversation for ingestion. Asynchronous by design —
-        extraction runs model calls the caller must not wait on."""
+        extraction runs model calls the caller must not wait on.
+
+        ``tags`` land on every memory extracted from it. ``occurred_at`` is when
+        the conversation happened: an aware ``datetime`` (a naive one is read
+        as UTC), a ``date`` for that calendar day, epoch seconds, or a string
+        the API reads (RFC 3339, ``YYYY-MM-DD``, or a datetime without an
+        offset, read in ``timezone``). ``timezone`` is IANA, e.g.
+        ``"Asia/Kolkata"``. ``date`` is the deprecated name of ``occurred_at``.
+        """
         body: dict[str, Any] = {"namespace": namespace or self.namespace, "messages": messages}
         if session_id:
             body["session_id"] = session_id
+        if tags:
+            body["tags"] = list(tags)
+        if occurred_at is not None:
+            body["occurred_at"] = _when(occurred_at)
+        if timezone:
+            body["timezone"] = timezone
         if date:
+            warnings.warn("remember(date=) is deprecated; pass occurred_at=", DeprecationWarning, stacklevel=2)
             body["date"] = date
         self._request("POST", "/v1/memories", json=body)
 
+    def write(
+        self,
+        memories: list[dict[str, Any]],
+        *,
+        namespace: Optional[str] = None,
+        timezone: Optional[str] = None,
+    ) -> None:
+        """Store already-formed memories, as given — no model decides what to
+        keep. Asynchronous like ``remember``: they reach retrieval in seconds.
+
+        Each is ``{"path", "content", "tags", "occurred_at", "confidence",
+        "ttl", "supersedes", "cues", "related"}``; only ``path`` (under
+        ``facts/``, ``incidents/``, ``rules/`` or ``skills/``, ending in
+        ``.md``) and ``content`` are required. ``occurred_at`` is what the
+        memory is about, converted as in ``remember``; ``date`` is its
+        deprecated name. Send batches: one call is one commit.
+        """
+        if not memories:
+            return None
+        wire = []
+        for i, m in enumerate(memories):
+            path = m.get("path") or ""
+            if not path.endswith(".md"):
+                raise ValueError(f"memory {i}: path {path!r} must end in .md")
+            m = dict(m)
+            if m.get("occurred_at") is not None:
+                m["occurred_at"] = _when(m["occurred_at"])
+            if m.get("date"):
+                warnings.warn("a memory's date is deprecated; set occurred_at", DeprecationWarning, stacklevel=2)
+            wire.append(m)
+        body: dict[str, Any] = {"namespace": namespace or self.namespace, "memories": wire}
+        if timezone:
+            body["timezone"] = timezone
+        self._request("POST", "/v1/memories", json=body)
+
+    def get(self, path: str, *, namespace: Optional[str] = None) -> dict[str, Any]:
+        """Read one memory by path — a file, or ``file.md#section``: what a
+        recall hit names. Raises ``GitloomError("not_found")`` when it is gone."""
+        return self._request(
+            "GET", "/v1/memories", params={"path": path, "namespace": namespace or self.namespace}
+        )
+
+    def forget(self, paths: list[str], *, namespace: Optional[str] = None) -> None:
+        """Delete memories by path. Asynchronous. It unpublishes them from
+        retrieval; git history keeps the earlier revisions."""
+        if isinstance(paths, str):
+            paths = [paths]
+        if not paths:
+            return None
+        self._request(
+            "DELETE",
+            "/v1/memories",
+            params={"path": ",".join(paths), "namespace": namespace or self.namespace},
+        )
+
+    def tree(
+        self, *, namespace: Optional[str] = None, path: Optional[str] = None, depth: Optional[int] = None
+    ) -> dict[str, Any]:
+        """The table of contents: tier → topic → file → sections, rooted at
+        ``path`` (the whole memory by default), ``depth`` levels down (default
+        2, at most 8)."""
+        params: dict[str, Any] = {"namespace": namespace or self.namespace}
+        if path:
+            params["path"] = path
+        if depth and depth > 0:
+            params["depth"] = depth
+        return self._request("GET", "/v1/tree", params=params)
+
+    def topics(
+        self,
+        *,
+        namespace: Optional[str] = None,
+        tier: Optional[str] = None,
+        prefix: Optional[str] = None,
+        like: Optional[str] = None,
+        max_depth: Optional[int] = None,
+        min_files: Optional[int] = None,
+        limit: Optional[int] = None,
+    ) -> dict[str, Any]:
+        """Every topic directory with its memory count. Check it before filing
+        under a new topic, so ``facts/database`` is not invented beside
+        ``facts/databases``. ``like`` matches the leaf name, case-insensitively."""
+        params: dict[str, Any] = {"namespace": namespace or self.namespace}
+        for k, v in (("tier", tier), ("prefix", prefix), ("like", like)):
+            if v:
+                params[k] = v
+        for k, n in (("max_depth", max_depth), ("min_files", min_files), ("limit", limit)):
+            if n and n > 0:
+                params[k] = n
+        res = self._request("GET", "/v1/topics", params=params) or {}
+        res.setdefault("topics", [])
+        return res
+
+    def graph(self, *, namespace: Optional[str] = None, limit: Optional[int] = None) -> dict[str, Any]:
+        """The relationship graph: ``nodes`` and ``edges``, with ``truncated``
+        set when it was larger than one response."""
+        params: dict[str, Any] = {"namespace": namespace or self.namespace}
+        if limit and limit > 0:
+            params["limit"] = limit
+        res = self._request("GET", "/v1/graph", params=params) or {}
+        res.setdefault("nodes", [])
+        res.setdefault("edges", [])
+        return res
+
     def recall(
         self,
-        query: str,
+        query: Optional[str] = None,
         *,
         namespace: Optional[str] = None,
         limit: Optional[int] = None,
@@ -93,8 +229,10 @@ class Gitloom:
         paths: Optional[list[str]] = None,
         tags: Optional[list[str]] = None,
         tags_all: Optional[list[str]] = None,
-        since: Any = None,
-        until: Any = None,
+        since: Optional[When] = None,
+        until: Optional[When] = None,
+        time_field: Optional[str] = None,
+        tz: Optional[str] = None,
         min_score: Optional[float] = None,
         context: Optional[bool] = None,
         detail: Optional[str] = None,
@@ -122,8 +260,23 @@ class Gitloom:
         caps the memory content returned, marking what it cut ``excerpted``.
         ``model`` of ``haiku`` or ``sonnet`` picks the reader in ``summary`` or
         ``agentic`` mode.
+
+        ``since`` and ``until`` bound ``time_field`` — ``occurred``,
+        ``created`` or ``updated`` (the default) — and take what ``remember``'s
+        ``occurred_at`` takes; a date-only ``until`` includes that whole day in
+        ``tz`` (IANA). The query is optional once a filter (``tags``,
+        ``tags_all``, ``since``, ``until``, ``tiers`` or ``paths``) says what
+        to list: every match comes back newest first, each scored 1.
+
+        Each memory's ``created_at``, ``updated_at``, ``occurred_at`` and
+        ``expires_at`` are aware UTC datetimes, None when unknown.
+        ``occurred_precision`` of ``day`` means only the date is known, held as
+        noon UTC; ``occurred_source`` says where the time came from.
+        ``user_tags`` are the tags a caller set; ``tags`` lists them first.
         """
-        params: dict[str, Any] = {"q": query, "namespace": namespace or self.namespace}
+        params: dict[str, Any] = {"namespace": namespace or self.namespace}
+        if query and query.strip():
+            params["q"] = query
         if limit:
             params["limit"] = limit
         if mode and mode != "raw":
@@ -137,9 +290,13 @@ class Gitloom:
         if tags_all:
             params["tags_all"] = ",".join(tags_all)
         if since is not None:
-            params["since"] = _as_date(since)
+            params["since"] = _when(since)
         if until is not None:
-            params["until"] = _as_date(until)
+            params["until"] = _when(until)
+        if time_field:
+            params["time_field"] = time_field
+        if tz:
+            params["tz"] = tz
         if min_score is not None:
             params["min_score"] = min_score
         if context is False:
@@ -154,8 +311,15 @@ class Gitloom:
             params["max_chars"] = max_chars
         if model:
             params["model"] = model
+        if "q" not in params and not any(params.get(k) for k in _FILTERS):
+            raise ValueError(
+                "recall needs a query, or a filter (tags, tags_all, since, until, tiers or paths) "
+                "saying what to list"
+            )
         res = self._request("GET", "/v1/retrieve", params=params) or {}
         res.setdefault("memories", [])
+        for m in res["memories"]:
+            _read_times(m)
         return res
 
     def answer(self, query: str, *, agentic: bool = False, **kwargs: Any) -> dict[str, Any]:
@@ -171,9 +335,10 @@ class Gitloom:
             raise GitloomError("no_answer", "The model did not produce an answer", 0)
         return res
 
-    def context(self, query: str, **kwargs: Any) -> Optional[dict[str, str]]:
+    def context(self, query: Optional[str] = None, **kwargs: Any) -> Optional[dict[str, str]]:
         """Retrieval rendered as a system message, ready to prepend. None when
-        nothing relevant is stored."""
+        nothing relevant is stored. Takes ``recall``'s filters, and like it
+        needs no query when one of them says what to list."""
         memories = self.recall(query, **kwargs).get("memories") or []
         if not memories:
             return None
@@ -252,8 +417,33 @@ def _error_from(res: httpx.Response) -> GitloomError:
     return GitloomError(code, message, res.status_code)
 
 
-def _as_date(value: Any) -> str:
-    """A date filter accepts what the caller already has: a string, or a date
-    or datetime, which the API reads as YYYY-MM-DD or RFC 3339."""
-    isoformat = getattr(value, "isoformat", None)
-    return isoformat() if callable(isoformat) else str(value)
+def _when(value: When) -> Union[int, str]:
+    """A time as the API reads it: a datetime as epoch seconds (naive is UTC),
+    a date as YYYY-MM-DD, a number floored to whole seconds, a string as is."""
+    if isinstance(value, dt.datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=dt.timezone.utc)
+        secs = math.floor(value.timestamp())
+        # The API reads epoch seconds as 9 to 11 digits; RFC 3339 reaches the rest.
+        if 10**8 <= secs < 10**11:
+            return secs
+        return value.astimezone(dt.timezone.utc).replace(microsecond=0).isoformat()
+    if isinstance(value, dt.date):
+        return value.isoformat()
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return math.floor(value)
+    if isinstance(value, str):
+        return value
+    raise TypeError(f"a time is a datetime, date, epoch seconds or string, not {type(value).__name__}")
+
+
+def _read_times(m: dict[str, Any]) -> None:
+    for k in _TIMES:
+        v = m.get(k)
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            m[k] = dt.datetime.fromtimestamp(v, tz=dt.timezone.utc)
+        elif v is None:
+            m[k] = None
+    m.setdefault("user_tags", [])
+    m.setdefault("occurred_source", None)
+    m.setdefault("occurred_precision", None)
