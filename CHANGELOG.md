@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.5.0 — Unreleased
+## 0.5.0 — 2026-10-04
 
 - **Direct memory, at parity with the Go SDK.** `write(memories)` stores
   already-formed memories without extraction; `get(path)` reads one back,
