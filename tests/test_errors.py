@@ -55,7 +55,10 @@ def test_any_other_error_is_named_by_its_status():
     assert (e.code, e.message) == ("http_502", "Internal server error")
 
     e = refusal(500, text="x" * 1000)
-    assert len(e.message) == 300
+    assert e.message == "x" * 300 + "…"
+
+    e = refusal(500, text="y" * 300)
+    assert e.message == "y" * 300
 
 
 @pytest.mark.parametrize("body", [b"", b"  \n\t", b"null"])

@@ -476,7 +476,9 @@ def _fallback_message(res: httpx.Response, body: Any) -> str:
     if isinstance(body, dict) and isinstance(body.get("message"), str) and body["message"]:
         return body["message"]
     text = res.text.strip()
-    return text[:300] if text and body is not None else _reason(res)
+    if not text or body is None:
+        return _reason(res)
+    return text[:300] + "…" if len(text) > 300 else text
 
 
 def _reason(res: httpx.Response) -> str:
