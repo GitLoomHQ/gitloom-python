@@ -14,8 +14,9 @@
   as given. `date=` still works, with a `DeprecationWarning`.
 - **Recall lists by filter alone.** `recall()` and `context()` need no query
   when `tags`, `tags_all`, `since`, `until`, `tiers` or `paths` says what to
-  list, and raise `ValueError` before sending when given neither. New
-  `time_field` (`occurred`, `created`, `updated`) and `tz`.
+  list. Given neither, they raise `GitloomError` with code `missing_query`
+  and status 0 before sending; it is also a `ValueError`. New `time_field`
+  (`occurred`, `created`, `updated`) and `tz`.
 - **Times on memories.** `created_at`, `updated_at`, `occurred_at` and
   `expires_at` are aware UTC datetimes, None when unknown, beside
   `occurred_source`, `occurred_precision` and `user_tags`. The `created` and

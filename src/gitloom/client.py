@@ -32,6 +32,11 @@ class GitloomError(Exception):
         self.status = status
 
 
+class MissingQueryError(GitloomError, ValueError):
+    """``missing_query``, raised before sending: a recall with neither a
+    query nor a filter. Still a ``ValueError`` for code that caught one."""
+
+
 class Gitloom:
     """The client. `Gitloom()` reads GITLOOM_API_KEY from the environment.
 
@@ -266,7 +271,8 @@ class Gitloom:
         ``occurred_at`` takes; a date-only ``until`` includes that whole day in
         ``tz`` (IANA). The query is optional once a filter (``tags``,
         ``tags_all``, ``since``, ``until``, ``tiers`` or ``paths``) says what
-        to list: every match comes back newest first, each scored 1.
+        to list: every match comes back newest first, each scored 1. With
+        neither, it raises ``GitloomError`` ``missing_query`` before sending.
 
         Each memory's ``created_at``, ``updated_at``, ``occurred_at`` and
         ``expires_at`` are aware UTC datetimes, None when unknown.
@@ -312,9 +318,11 @@ class Gitloom:
         if model:
             params["model"] = model
         if "q" not in params and not any(params.get(k) for k in _FILTERS):
-            raise ValueError(
+            raise MissingQueryError(
+                "missing_query",
                 "recall needs a query, or a filter (tags, tags_all, since, until, tiers or paths) "
-                "saying what to list"
+                "saying what to list",
+                0,
             )
         res = self._request("GET", "/v1/retrieve", params=params) or {}
         res.setdefault("memories", [])

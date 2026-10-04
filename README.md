@@ -135,9 +135,10 @@ for m in res["memories"]:
 Without a query, a filter (`tags`, `tags_all`, `since`, `until`, `tiers` or
 `paths`) says what to list, and every match comes back newest first by
 `time_field` (`occurred`, `created`, or `updated` by default), scored 1. With
-neither, `recall` raises `ValueError` before sending anything. A listing is raw
-retrieval: `answer` and `rank` need a query. `since` and `until` take what
-`occurred_at` takes, and a date-only `until` includes that whole day in `tz`.
+neither, `recall` raises `GitloomError` with code `missing_query` (also a
+`ValueError`) before sending anything. A listing is raw retrieval: `answer` and
+`rank` need a query. `since` and `until` take what `occurred_at` takes, and a
+date-only `until` includes that whole day in `tz`.
 
 Every memory carries `created_at`, `updated_at`, `occurred_at` and
 `expires_at` as aware UTC datetimes (None when unknown); `occurred_precision`,

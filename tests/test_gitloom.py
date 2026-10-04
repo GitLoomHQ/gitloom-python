@@ -481,12 +481,18 @@ def test_recall_with_neither_query_nor_filter_raises_before_sending():
     seen = []
     gl = _recording(seen)
     for kwargs in ({}, {"time_field": "occurred", "tz": "UTC"}, {"tags": []}, {"limit": 5}):
-        with pytest.raises(ValueError, match="query, or a filter"):
+        with pytest.raises(GitloomError, match="query, or a filter") as e:
             gl.recall(**kwargs)
-    with pytest.raises(ValueError):
+        assert (e.value.code, e.value.status) == ("missing_query", 0)
+    with pytest.raises(GitloomError) as e:
         gl.recall("   ")
-    with pytest.raises(ValueError):
+    assert e.value.code == "missing_query"
+    with pytest.raises(GitloomError) as e:
         gl.context()
+    assert e.value.code == "missing_query"
+    # Code written against the earlier ValueError still catches it.
+    with pytest.raises(ValueError):
+        gl.recall()
     assert seen == []
 
 
