@@ -224,17 +224,27 @@ reaches them too.
 ## Multimodal
 
 ```python
-from gitloom import image_data, text_part
+# Upload the photo once and hand the model a short-lived URL to it, so the
+# stored turn holds a reference rather than the bytes.
+gl = openai.gitloom.memory   # the Gitloom client behind the wrapper
+with open("photo.png", "rb") as f:
+    media_id = gl.upload_media("image/png", f.read())["id"]
+url = gl.get_media(media_id)["url"]
 
 openai.chat.completions.create(
     model="gpt-4o",
     messages=[{"role": "user", "content": [
-        text_part("what's in this photo?"),
-        image_data(b64, "image/png"),   # uploaded transparently; stored by reference
+        {"type": "text", "text": "what's in this photo?"},
+        {"type": "image_url", "image_url": {"url": url}},
     ]}],
     conversation="chat-42",
 )
 ```
+
+Content parts go to the model exactly as you write them, so they take the
+provider's own shape. `text_part`, `image_part` and `image_data` build GitLoom's
+parts for `conv.append()` on a conversation you drive yourself, where
+`image_data`'s bytes are uploaded on append and stored by reference.
 
 ## Errors
 
