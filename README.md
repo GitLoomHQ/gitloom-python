@@ -236,6 +236,15 @@ openai.chat.completions.create(
 )
 ```
 
+## Errors
+
+A refused or failed call raises `GitloomError`, with a `code`, a `message` and
+the HTTP `status` (0 when no response came back). The API's own codes arrive as
+sent: `invalid_tag`, `quota_exceeded`, `namespace_not_found` and the rest. The
+SDK adds `missing_api_key` (no key at construction), `unauthorized` (the key
+was refused), `missing_query` (a recall with neither query nor filter),
+`network_error` (no response), and `http_<status>` for anything else.
+
 ## Docs
 
 https://docs.gitloom.cloud/documentation/python

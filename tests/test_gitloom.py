@@ -527,7 +527,7 @@ def test_retrieve_refusals_carry_their_codes():
     for status, body, code in (
         (400, {"error": {"code": "invalid_tag", "message": "tags[0] \"a+b\" has a character not allowed"}}, "invalid_tag"),
         (400, {"error": {"code": "invalid_date", "message": "since is after until"}}, "invalid_date"),
-        (400, {"error": "q is required"}, "http_error"),
+        (400, {"error": "q is required"}, "http_400"),
     ):
         gl = Gitloom("k", namespace="ns",
                      transport=httpx.MockTransport(lambda r, s=status, b=body: httpx.Response(s, json=b)))

@@ -21,6 +21,20 @@
   `expires_at` are aware UTC datetimes, None when unknown, beside
   `occurred_source`, `occurred_precision` and `user_tags`. The `created` and
   `updated` strings are deprecated.
+- **`get()` reads like `recall()`.** Its `created_at`, `updated_at`,
+  `occurred_at` and `expires_at` are aware UTC datetimes too, and on both an
+  untagged memory has `tags` and `user_tags` of `[]` rather than None.
+- **One error contract across the SDKs.** An error the API sends in its
+  `{"error": {"code", "message"}}` envelope keeps its code and message. A 401
+  or 403 without it, the gateway refusing a key, is `unauthorized`, with a
+  message pointing at `GITLOOM_API_KEY`. Building a client with no key raises
+  `missing_api_key`, and a request that got no response (connection failure,
+  timeout) raises `network_error` with the httpx exception as its cause; both
+  have status 0. An error body that is not a JSON object no longer crashes the
+  error handling.
+- **Changed:** an error without the envelope had code `http_error`; it is now
+  `http_<status>`, e.g. `http_500`, with the body's `message`, its text, or
+  the HTTP reason as the message.
 - **Changed:** a naive `datetime` passed to `since` or `until` is read as UTC;
   it used to be sent without an offset and read in `tz`, else UTC. Query
   values encode a space as `%20` rather than `+`.

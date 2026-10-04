@@ -38,7 +38,8 @@ class MissingQueryError(GitloomError, ValueError):
 
 
 class Gitloom:
-    """The client. `Gitloom()` reads GITLOOM_API_KEY from the environment.
+    """The client. `Gitloom()` reads GITLOOM_API_KEY from the environment,
+    and raises ``GitloomError("missing_api_key")`` when there is none.
 
     Writes are never retried: a retried write that half-succeeded
     double-charges the meter and double-stores the message.
@@ -54,6 +55,8 @@ class Gitloom:
         transport: Optional[httpx.BaseTransport] = None,
     ):
         self.api_key = api_key or os.environ.get("GITLOOM_API_KEY", "")
+        if not self.api_key.strip():
+            raise GitloomError("missing_api_key", "No API key. Pass api_key= or set GITLOOM_API_KEY.", 0)
         self.namespace = namespace
         self._vocab: Optional["Vocab"] = None
         self._skills: Optional["Skills"] = None
@@ -72,7 +75,10 @@ class Gitloom:
         qs = urlencode({k: v for k, v in (params or {}).items() if v is not None}, quote_via=quote, safe="")
         if qs:
             url += "?" + qs
-        res = self._http.request(method, url, json=json)
+        try:
+            res = self._http.request(method, url, json=json)
+        except httpx.TransportError as e:
+            raise GitloomError("network_error", str(e) or type(e).__name__, 0) from e
         if res.status_code >= 400:
             raise _error_from(res)
         if not res.content:
@@ -156,10 +162,13 @@ class Gitloom:
 
     def get(self, path: str, *, namespace: Optional[str] = None) -> dict[str, Any]:
         """Read one memory by path — a file, or ``file.md#section``: what a
-        recall hit names. Raises ``GitloomError("not_found")`` when it is gone."""
-        return self._request(
+        recall hit names. Raises ``GitloomError("not_found")`` when it is gone.
+        Its times and tags read as ``recall``'s do."""
+        m = self._request(
             "GET", "/v1/memories", params={"path": path, "namespace": namespace or self.namespace}
-        )
+        ) or {}
+        _read_memory(m)
+        return m
 
     def forget(self, paths: list[str], *, namespace: Optional[str] = None) -> None:
         """Delete memories by path. Asynchronous. It unpublishes them from
@@ -327,7 +336,7 @@ class Gitloom:
         res = self._request("GET", "/v1/retrieve", params=params) or {}
         res.setdefault("memories", [])
         for m in res["memories"]:
-            _read_times(m)
+            _read_memory(m)
         return res
 
     def answer(self, query: str, *, agentic: bool = False, **kwargs: Any) -> dict[str, Any]:
@@ -411,18 +420,40 @@ class Gitloom:
         return conv
 
 
+_GATEWAY_REFUSALS = {
+    401: "No API key was accepted (401 Unauthorized) — check GITLOOM_API_KEY.",
+    403: "The API key was not accepted (403 Forbidden) — check GITLOOM_API_KEY, "
+    "or whether the key has been revoked.",
+}
+
+
 def _error_from(res: httpx.Response) -> GitloomError:
-    code, message = "http_error", res.text.strip()
+    status = res.status_code
     try:
-        err = res.json().get("error")
-        if isinstance(err, str):
-            message = err
-        elif isinstance(err, dict):
-            code = err.get("code") or code
-            message = err.get("message") or message
+        body = res.json()
     except ValueError:
-        pass
-    return GitloomError(code, message, res.status_code)
+        body = None
+    err = body.get("error") if isinstance(body, dict) else None
+    if isinstance(err, dict):
+        code = err.get("code") or f"http_{status}"
+        return GitloomError(code, err.get("message") or _reason(res), status)
+    # API Gateway answers a missing or rejected key itself, without the envelope.
+    if status in _GATEWAY_REFUSALS:
+        return GitloomError("unauthorized", _GATEWAY_REFUSALS[status], status)
+    if isinstance(err, str) and err:
+        return GitloomError(f"http_{status}", err, status)
+    return GitloomError(f"http_{status}", _fallback_message(res, body), status)
+
+
+def _fallback_message(res: httpx.Response, body: Any) -> str:
+    if isinstance(body, dict) and isinstance(body.get("message"), str) and body["message"]:
+        return body["message"]
+    text = res.text.strip()
+    return text[:300] if text else _reason(res)
+
+
+def _reason(res: httpx.Response) -> str:
+    return res.reason_phrase or httpx.codes.get_reason_phrase(res.status_code) or f"HTTP {res.status_code}"
 
 
 def _when(value: When) -> Union[int, str]:
@@ -445,13 +476,15 @@ def _when(value: When) -> Union[int, str]:
     raise TypeError(f"a time is a datetime, date, epoch seconds or string, not {type(value).__name__}")
 
 
-def _read_times(m: dict[str, Any]) -> None:
+def _read_memory(m: dict[str, Any]) -> None:
     for k in _TIMES:
         v = m.get(k)
         if isinstance(v, (int, float)) and not isinstance(v, bool):
             m[k] = dt.datetime.fromtimestamp(v, tz=dt.timezone.utc)
         elif v is None:
             m[k] = None
-    m.setdefault("user_tags", [])
+    for k in ("user_tags", "tags"):
+        if m.get(k) is None:
+            m[k] = []
     m.setdefault("occurred_source", None)
     m.setdefault("occurred_precision", None)

@@ -153,6 +153,34 @@ def test_get_reads_by_path_and_encodes_a_section():
     assert m["content"] == "Maya rides a bicycle." and m["confidence"] == 0.8
 
 
+def test_get_reads_times_and_tags_as_recall_does():
+    # A dev response, verbatim.
+    _, gl = recorder({
+        "confidence": 0, "content": "…", "created": "2026-10-04T13:33:23Z", "created_at": 1791120803,
+        "kind": "file", "millis": 0, "namespace": "x", "occurred_at": 1772712000,
+        "occurred_precision": "day", "occurred_source": "user", "path": "facts/test/a.md",
+        "tags": ["home", "lease"], "tier": "facts", "title": "", "updated": "2026-10-04T13:33:23Z",
+        "updated_at": 1791120803, "user_tags": ["home", "lease"],
+    })
+    m = gl.get("facts/test/a.md")
+    utc = dt.timezone.utc
+    assert m["created_at"] == m["updated_at"] == dt.datetime(2026, 10, 4, 13, 33, 23, tzinfo=utc)
+    assert m["occurred_at"] == dt.datetime(2026, 3, 5, 12, 0, tzinfo=utc)
+    assert m["created_at"].tzinfo is not None
+    assert m["expires_at"] is None
+    assert [m["occurred_precision"], m["occurred_source"]] == ["day", "user"]
+    assert m["user_tags"] == m["tags"] == ["home", "lease"]
+    assert m["created"] == "2026-10-04T13:33:23Z"
+
+
+def test_get_of_an_untagged_memory_has_empty_tags():
+    _, gl = recorder({"namespace": "x", "path": "facts/test/b.md", "content": "…",
+                      "tags": None, "user_tags": None, "created_at": 1791120803})
+    m = gl.get("facts/test/b.md")
+    assert m["tags"] == [] and m["user_tags"] == []
+    assert [m["occurred_at"], m["occurred_source"], m["occurred_precision"]] == [None, None, None]
+
+
 def test_get_of_a_missing_memory_raises():
     _, gl = recorder({"error": {"code": "not_found", "message": "no memory at \"facts/x.md\""}}, status=404)
     with pytest.raises(GitloomError) as e:
