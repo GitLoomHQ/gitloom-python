@@ -102,6 +102,50 @@ last diff, labelled relation snippets and cues.
 `answer` is metered as a chat, not a read, and raises rather than handing back
 an empty string when the model finds nothing to say.
 
+### Tags, and when it happened
+
+```python
+memory.remember(
+    [{"role": "user", "content": "We shipped the beta to the first ten teams."}],
+    tags=["#launch", "beta"],         # on every memory drawn from it
+    occurred_at="2026-09-30 18:00",   # when it happened, not when you sent it…
+    timezone="Asia/Kolkata",          # …read in this zone
+)
+```
+
+`occurred_at` keeps backfilled history at its real dates. It takes an aware
+`datetime` (a naive one is read as UTC), a `date` for that calendar day, epoch
+seconds, or a string: RFC 3339, `YYYY-MM-DD`, or a datetime without an offset,
+read in `timezone`. `date=` still works, deprecated.
+
+Tags are trimmed and lowercased; they hold letters, digits, spaces and
+`- _ . : / # @`, up to 32 tags of 64 characters. A bad one raises
+`GitloomError` with code `invalid_tag`, naming the field.
+
+### Listing without a question
+
+```python
+from datetime import date
+
+res = memory.recall(tags=["#launch"], since=date(2026, 9, 1), time_field="occurred")
+for m in res["memories"]:
+    print(m["occurred_at"], m["path"], m["user_tags"])
+```
+
+Without a query, a filter (`tags`, `tags_all`, `since`, `until`, `tiers` or
+`paths`) says what to list, and every match comes back newest first by
+`time_field` (`occurred`, `created`, or `updated` by default), scored 1. With
+neither, `recall` raises `ValueError` before sending anything. A listing is raw
+retrieval: `answer` and `rank` need a query. `since` and `until` take what
+`occurred_at` takes, and a date-only `until` includes that whole day in `tz`.
+
+Every memory carries `created_at`, `updated_at`, `occurred_at` and
+`expires_at` as aware UTC datetimes (None when unknown); `occurred_precision`,
+`day` when only the date is known (held as noon UTC) or `instant`;
+`occurred_source`, one of `user`, `extracted`, `said` or `written`; and
+`user_tags`, the tags you set, which `tags` lists first. The `created` and
+`updated` strings remain, deprecated.
+
 ### The lane path
 
 `rank` retrieves on the lane path: lexical, cue, body, graph and time lanes each
@@ -123,6 +167,32 @@ conversation `turn`) and the days it was `said`. `max_chars` caps the memory
 content returned: a memory that does not fit is cut to its opening sentence and
 the sentences matching the question, and marked `excerpted`. `model` picks the
 model that reads the memories in `summary` or `agentic` mode.
+
+## Direct memory
+
+When you already know what a memory says and where it belongs (a migration, or
+an agent filing its own conclusion), store it as written, with no extraction:
+
+```python
+from datetime import date
+
+memory.write([
+    {"path": "facts/people/maya.md", "content": "Maya rides a bicycle to work.",
+     "tags": ["people"], "occurred_at": date(2026, 7, 19),
+     "cues": ["how does Maya get around"]},
+])
+
+# Seconds later, once the write has landed:
+memory.get("facts/people/maya.md")["content"]   # read what a recall hit names
+memory.tree(path="facts", depth=3)              # tier → topic → file → sections
+memory.topics(like="databas")                   # check before inventing a topic
+memory.graph(limit=200)                         # nodes, edges, truncated
+memory.forget(["facts/people/maya.md"])
+```
+
+Paths sit under `facts/`, `incidents/`, `rules/` or `skills/` and end in `.md`,
+checked before anything is sent. Send writes in batches: one call is one
+commit.
 
 ## Vocabulary and skills
 

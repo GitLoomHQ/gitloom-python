@@ -1,7 +1,28 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 — Unreleased
 
+- **Direct memory, at parity with the Go SDK.** `write(memories)` stores
+  already-formed memories without extraction; `get(path)` reads one back,
+  `forget(paths)` deletes, `tree()` and `topics()` show what is in a
+  namespace, `graph()` how its memories relate. A path not ending in `.md` is
+  refused before sending. All of them are on `openai.gitloom` too.
+- **Tags and times on writes.** `remember()` takes `tags` (on every memory
+  extracted), `occurred_at` and `timezone`; `write()` memories take `tags` and
+  `occurred_at`. A `datetime` is sent as epoch seconds (a naive one is read as
+  UTC), a `date` as `YYYY-MM-DD`, a number floored to whole seconds, a string
+  as given. `date=` still works, with a `DeprecationWarning`.
+- **Recall lists by filter alone.** `recall()` and `context()` need no query
+  when `tags`, `tags_all`, `since`, `until`, `tiers` or `paths` says what to
+  list, and raise `ValueError` before sending when given neither. New
+  `time_field` (`occurred`, `created`, `updated`) and `tz`.
+- **Times on memories.** `created_at`, `updated_at`, `occurred_at` and
+  `expires_at` are aware UTC datetimes, None when unknown, beside
+  `occurred_source`, `occurred_precision` and `user_tags`. The `created` and
+  `updated` strings are deprecated.
+- **Changed:** a naive `datetime` passed to `since` or `until` is read as UTC;
+  it used to be sent without an offset and read in `tz`, else UTC. Query
+  values encode a space as `%20` rather than `+`.
 - **`recall()` and `answer()` take `rank`, `max_chars` and `model`.**
   `rank="fused"` or `rank="jev"` retrieves on the lane path, which also
   reaches conversation turns and the dates in a question; `max_chars` caps the
