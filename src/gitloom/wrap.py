@@ -142,8 +142,9 @@ class GitloomFeatures:
     conversation the completions are flowing through, with everything the
     provider SDK lacks: ``rewind``, ``edit``, ``edit_in_place``, ``set_title``,
     ``branches``, ``compact``, ``ingest``. The memory surface is forwarded here
-    too — ``recall``, ``answer``, ``remember``, ``vocab``, ``skills`` — and
-    ``memory`` is the underlying client for media and everything else.
+    too — ``recall``, ``answer``, ``remember``, ``write``, ``get``, ``forget``,
+    ``tree``, ``topics``, ``graph``, ``vocab``, ``skills`` — and ``memory`` is
+    the underlying client for media and everything else.
     """
 
     def __init__(self, wrapped: _Wrapped):
@@ -159,7 +160,7 @@ class GitloomFeatures:
         completion continues from."""
         return self._wrapped._conversation(conversation_id, model)
 
-    def recall(self, query: str, **kw: Any) -> Any:
+    def recall(self, query: Optional[str] = None, **kw: Any) -> Any:
         return self._wrapped._memory.recall(query, **kw)
 
     def answer(self, query: str, **kw: Any) -> Any:
@@ -167,6 +168,24 @@ class GitloomFeatures:
 
     def remember(self, messages: Any, **kw: Any) -> Any:
         return self._wrapped._memory.remember(messages, **kw)
+
+    def write(self, memories: Any, **kw: Any) -> Any:
+        return self._wrapped._memory.write(memories, **kw)
+
+    def get(self, path: str, **kw: Any) -> Any:
+        return self._wrapped._memory.get(path, **kw)
+
+    def forget(self, paths: Any, **kw: Any) -> Any:
+        return self._wrapped._memory.forget(paths, **kw)
+
+    def tree(self, **kw: Any) -> Any:
+        return self._wrapped._memory.tree(**kw)
+
+    def topics(self, **kw: Any) -> Any:
+        return self._wrapped._memory.topics(**kw)
+
+    def graph(self, **kw: Any) -> Any:
+        return self._wrapped._memory.graph(**kw)
 
     @property
     def vocab(self) -> Any:

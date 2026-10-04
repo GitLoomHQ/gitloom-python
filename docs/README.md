@@ -102,6 +102,99 @@ last diff, labelled relation snippets and cues.
 `answer` is metered as a chat, not a read, and raises rather than handing back
 an empty string when the model finds nothing to say.
 
+### Tags, and when it happened
+
+```python
+memory.remember(
+    [{"role": "user", "content": "We shipped the beta to the first ten teams."}],
+    tags=["#launch", "beta"],         # on every memory drawn from it
+    occurred_at="2026-09-30 18:00",   # when it happened, not when you sent it…
+    timezone="Asia/Kolkata",          # …read in this zone
+)
+```
+
+`occurred_at` keeps backfilled history at its real dates. It takes an aware
+`datetime` (a naive one is read as UTC), a `date` for that calendar day, epoch
+seconds, or a string: RFC 3339, `YYYY-MM-DD`, or a datetime without an offset,
+read in `timezone`. `date=` still works, deprecated.
+
+Tags are trimmed and lowercased; they hold letters, digits, spaces and
+`- _ . : / # @`, up to 32 tags of 64 characters. A bad one raises
+`GitloomError` with code `invalid_tag`, naming the field.
+
+### Listing without a question
+
+```python
+from datetime import date
+
+res = memory.recall(tags=["#launch"], since=date(2026, 9, 1), time_field="occurred")
+for m in res["memories"]:
+    print(m["occurred_at"], m["path"], m["user_tags"])
+```
+
+Without a query, a filter (`tags`, `tags_all`, `since`, `until`, `tiers` or
+`paths`) says what to list, and every match comes back newest first by
+`time_field` (`occurred`, `created`, or `updated` by default), scored 1. With
+neither, `recall` raises `GitloomError` with code `missing_query` (also a
+`ValueError`) before sending anything. A listing is raw retrieval: `answer` and
+`rank` need a query. `since` and `until` take what `occurred_at` takes, and a
+date-only `until` includes that whole day in `tz`.
+
+Every memory carries `created_at`, `updated_at`, `occurred_at` and
+`expires_at` as aware UTC datetimes (None when unknown); `occurred_precision`,
+`day` when only the date is known (held as noon UTC) or `instant`;
+`occurred_source`, one of `user`, `extracted`, `said` or `written`; and
+`user_tags`, the tags you set, which `tags` lists first. The `created` and
+`updated` strings remain, deprecated.
+
+### The lane path
+
+`rank` retrieves on the lane path: lexical, cue, body, graph and time lanes each
+search on their own, over the curated memories and the conversation turns, and
+the time lane reads dates in the question ("last month", "in May"). `fused`
+orders what they find by lane score; `jev` has a ranking model order it, and
+sets `rank_fallback` when it answers in lane order instead.
+
+```python
+res = memory.recall("when did I stake the tomatoes", rank="fused", max_chars=8000)
+for m in res["memories"]:
+    print(m.get("store"), m.get("said"), m.get("excerpted"), m["content"])
+
+print(memory.answer("what did I plant after the storm", rank="jev", model="sonnet")["answer"])
+```
+
+Each memory then says which `store` it came from (`memory`, or a word-for-word
+conversation `turn`) and the days it was `said`. `max_chars` caps the memory
+content returned: a memory that does not fit is cut to its opening sentence and
+the sentences matching the question, and marked `excerpted`. `model` picks the
+model that reads the memories in `summary` or `agentic` mode.
+
+## Direct memory
+
+When you already know what a memory says and where it belongs (a migration, or
+an agent filing its own conclusion), store it as written, with no extraction:
+
+```python
+from datetime import date
+
+memory.write([
+    {"path": "facts/people/maya.md", "content": "Maya rides a bicycle to work.",
+     "tags": ["people"], "occurred_at": date(2026, 7, 19),
+     "cues": ["how does Maya get around"]},
+])
+
+# Seconds later, once the write has landed:
+memory.get("facts/people/maya.md")["content"]   # read what a recall hit names
+memory.tree(path="facts", depth=3)              # tier → topic → file → sections
+memory.topics(like="databas")                   # check before inventing a topic
+memory.graph(limit=200)                         # nodes, edges, truncated
+memory.forget(["facts/people/maya.md"])
+```
+
+Paths sit under `facts/`, `incidents/`, `rules/` or `skills/` and end in `.md`,
+checked before anything is sent. Send writes in batches: one call is one
+commit.
+
 ## Vocabulary and skills
 
 ```python
@@ -142,6 +235,25 @@ openai.chat.completions.create(
     conversation="chat-42",
 )
 ```
+
+## Errors
+
+A refused or failed call raises `GitloomError`, with a `code`, a `message` and
+the HTTP `status` (0 when no response came back). The API's own codes arrive as
+sent: `invalid_tag`, `quota_exceeded`, `rate_limited`, `namespace_not_found`
+and the rest. The SDK adds:
+
+- `missing_api_key` and `invalid_api_key`, raised by `Gitloom()` itself,
+  before any request: no key in the argument or `GITLOOM_API_KEY`, or one
+  with whitespace or control characters inside. Surrounding whitespace is
+  trimmed. Build the client after loading your `.env`, not at import time.
+- `unauthorized`: the key was refused.
+- `missing_query`: a recall with neither a query nor a filter.
+- `network_error` (no response) and `timeout`.
+- `http_<status>` for anything else.
+
+On a 429, `retry_after` holds the seconds the server asked you to wait, when
+it said; the SDK never retries by itself.
 
 ## Docs
 
